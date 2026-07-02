@@ -1,0 +1,101 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-ink-50 text-ink-800 font-sans antialiased;
+    margin: 0;
+  }
+
+  ::selection {
+    @apply bg-straive-100 text-straive-900;
+  }
+
+  /* Thin enterprise scrollbars */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #cdd5e0 transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-thumb {
+    @apply bg-ink-200 rounded-full;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    @apply bg-ink-300;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-white border border-ink-200 rounded-xl shadow-card;
+  }
+
+  .input {
+    @apply w-full rounded-lg border border-ink-200 bg-white px-3 py-2 text-sm text-ink-800
+      placeholder:text-ink-400 outline-none transition focus:border-straive-500
+      focus:ring-2 focus:ring-straive-500/20;
+  }
+
+  /* Card that responds to hover (clickable rows, tiles) */
+  .card-interactive {
+    @apply card transition hover:shadow-cardHover hover:border-ink-300;
+  }
+
+  /* Eyebrow label on dark chrome */
+  .label-dark {
+    @apply block text-[11px] font-semibold uppercase tracking-wider text-navy-300 mb-1.5;
+  }
+
+  .label {
+    @apply block text-xs font-semibold uppercase tracking-wide text-ink-500 mb-1.5;
+  }
+
+  .hairline {
+    @apply border-ink-200;
+  }
+
+  .skeleton {
+    background: linear-gradient(90deg, #eef1f6 25%, #e2e7ef 37%, #eef1f6 63%);
+    background-size: 800px 100%;
+    @apply animate-shimmer rounded;
+  }
+
+  /* Deep navy chrome with a subtle mesh + top sheen (top bar / hero) */
+  .chrome-mesh {
+    background-color: #0d1b2e;
+    background-image:
+      radial-gradient(60% 120% at 12% 0%, rgba(255, 80, 0, 0.16), transparent 60%),
+      radial-gradient(50% 120% at 100% 0%, rgba(42, 127, 208, 0.18), transparent 55%),
+      linear-gradient(180deg, #16294a 0%, #0d1b2e 60%, #081320 100%);
+  }
+
+  /* Frosted panel over dark chrome */
+  .glass {
+    @apply bg-white/5 ring-1 ring-white/10 backdrop-blur-md;
+  }
+
+  /* Floating 3D gradient orb decoration */
+  .orb {
+    @apply pointer-events-none absolute rounded-full blur-2xl;
+  }
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+}
