@@ -3,7 +3,9 @@ import react from '@vitejs/plugin-react'
 import { fileURLToPath, URL } from 'node:url'
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  // On GitHub Pages the app is served from /ForgeEditorialLab/; dev stays at /.
+  base: command === 'build' ? '/ForgeEditorialLab/' : '/',
   plugins: [react()],
   resolve: {
     alias: {
@@ -20,4 +22,4 @@ export default defineConfig({
     // viz lib, so lift the warning threshold for it specifically.
     chunkSizeWarningLimit: 700,
   },
-})
+}))
