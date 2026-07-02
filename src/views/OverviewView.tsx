@@ -2,9 +2,7 @@ import { useAppStore } from '@/store/useAppStore'
 import { Card, CardBody, CardHeader } from '@/components/Card'
 import { Button } from '@/components/Button'
 import { Badge } from '@/components/Badge'
-import { Stat } from '@/components/EmptyState'
 import { Disclaimer } from '@/components/Disclaimer'
-import { profileCoverage } from '@/lib/brand/profile'
 import { PIPELINE, type NavItem } from './nav'
 import { SEED_COMPLETED_RUN } from '@/seed/completedRun'
 import {
@@ -18,14 +16,12 @@ import type { ViewId } from '@/store/useAppStore'
 
 export function OverviewView() {
   const setView = useAppStore((s) => s.setView)
-  const repo = useAppStore((s) => s.brandRepo)
   const profile = useAppStore((s) => s.brandProfile)
   const settings = useAppStore((s) => s.settings)
   const log = useAppStore((s) => s.routerLog)
   const loadCompletedRun = useAppStore((s) => s.loadCompletedRun)
   const pushToast = useAppStore((s) => s.pushToast)
   const hasRun = useAppStore((s) => s.pipeline.publish !== null)
-  const coverage = profileCoverage(repo)
   const live = Boolean(settings.gatewayUrl.trim() && settings.apiKey.trim())
 
   return (
@@ -94,18 +90,6 @@ export function OverviewView() {
             </div>
           </div>
         </div>
-      </div>
-
-      {/* status row */}
-      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat label="Brand assets" value={repo.length} />
-        <Stat
-          label="Profile coverage"
-          value={`${coverage.pct}%`}
-          tone={coverage.pct === 100 ? 'ok' : 'warn'}
-        />
-        <Stat label="Mode" value={live ? 'Live' : 'Demo'} tone={live ? 'ok' : 'warn'} />
-        <Stat label="Default brand" value={profile.brandName} />
       </div>
 
       <div className="grid gap-5 lg:grid-cols-3">

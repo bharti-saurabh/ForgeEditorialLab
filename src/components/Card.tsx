@@ -34,8 +34,8 @@ export function CardHeader({
       <div className="flex items-start gap-3 min-w-0">
         {icon && <div className="mt-0.5 text-brand-navy shrink-0">{icon}</div>}
         <div className="min-w-0">
-          <h3 className="text-sm font-semibold text-ink-900 leading-tight">{title}</h3>
-          {subtitle && <p className="text-xs text-ink-500 mt-0.5">{subtitle}</p>}
+          <h3 className="text-base font-semibold text-ink-900 leading-tight">{title}</h3>
+          {subtitle && <p className="text-[13px] text-ink-500 mt-1">{subtitle}</p>}
         </div>
       </div>
       {actions && <div className="flex items-center gap-2 shrink-0">{actions}</div>}

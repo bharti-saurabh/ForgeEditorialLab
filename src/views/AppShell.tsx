@@ -1,11 +1,18 @@
 import type { ReactNode } from 'react'
 import { useAppStore, type ViewId } from '@/store/useAppStore'
-import { FOUNDATION, PIPELINE, SETTINGS_NAV, type NavItem } from './nav'
+import { FOUNDATION } from './nav'
+import { PIPELINE_STEPS } from '@/components/StepRail'
 import { ModelRouterConsole } from './ModelRouterConsole'
-import { StepRail } from '@/components/StepRail'
-import { ForgeLockup } from '@/components/Logo'
+import { ForgeLockup, ClientChip } from '@/components/Logo'
 import { friendlyModel } from '@/lib/router/roles'
-import { IconRoute, IconActivity, IconGear, IconSidebar } from '@/components/icons'
+import {
+  IconRoute,
+  IconActivity,
+  IconGear,
+  IconHome,
+  IconBolt,
+  type IconType,
+} from '@/components/icons'
 import { cn } from '@/lib/cn'
 
 type Area = 'foundation' | 'pipeline' | 'settings'
@@ -21,44 +28,77 @@ function stepOf(v: ViewId): number | null {
   return m ? Number(m[1]) : null
 }
 
+/** Primary area switches shown as 3D-icon tabs. */
+interface TopTab {
+  key: Exclude<Area, 'settings'>
+  label: string
+  icon: IconType
+  landing: ViewId
+}
+const TOP_NAV: TopTab[] = [
+  { key: 'foundation', label: 'Foundation', icon: IconHome, landing: 'overview' },
+  { key: 'pipeline', label: 'Editorial Lab', icon: IconBolt, landing: 'step-1' },
+]
+
+type PillState = 'active' | 'done' | 'todo'
+interface PillItem {
+  id: ViewId
+  label: string
+  icon: IconType
+  state: PillState
+}
+
 export function AppShell({ children }: { children: ReactNode }) {
   const activeView = useAppStore((s) => s.activeView)
   const setView = useAppStore((s) => s.setView)
   const routerOpen = useAppStore((s) => s.routerOpen)
   const toggleRouter = useAppStore((s) => s.toggleRouter)
-  const collapsed = useAppStore((s) => s.sidebarCollapsed)
-  const toggleSidebar = useAppStore((s) => s.toggleSidebar)
   const settings = useAppStore((s) => s.settings)
   const log = useAppStore((s) => s.routerLog)
-  const profile = useAppStore((s) => s.brandProfile)
   const live = Boolean(settings.gatewayUrl.trim() && settings.apiKey.trim())
   const area = areaOf(activeView)
   const currentStep = stepOf(activeView)
 
+  // Sub-nav pills for the active area (foundation views or pipeline steps).
+  let pills: PillItem[] = []
+  if (area === 'foundation') {
+    pills = FOUNDATION.map((f) => ({
+      id: f.id,
+      label: f.label,
+      icon: f.icon,
+      state: activeView === f.id ? 'active' : 'todo',
+    }))
+  } else if (area === 'pipeline' && currentStep) {
+    pills = PIPELINE_STEPS.map((s) => ({
+      id: `step-${s.step}` as ViewId,
+      label: s.short,
+      icon: s.icon,
+      state: s.step === currentStep ? 'active' : s.step < currentStep ? 'done' : 'todo',
+    }))
+  }
+
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-ink-50 text-ink-800">
-      {/* ── Top chrome ─────────────────────────────────────────── */}
-      <header className="no-print chrome-mesh relative z-20 flex h-16 shrink-0 items-center justify-between pl-3 pr-4 shadow-[0_1px_0_rgba(255,255,255,0.06)]">
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => toggleSidebar()}
-            aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
-            className="flex h-9 w-9 items-center justify-center rounded-lg text-navy-200 ring-1 ring-white/10 transition hover:bg-white/10 hover:text-white"
-          >
-            <IconSidebar size={17} className={cn('transition', collapsed && 'opacity-70')} />
-          </button>
-          <ForgeLockup onDark />
-        </div>
+      {/* ── Single top bar: brand · primary nav · sub-nav · status ─ */}
+      <header className="no-print chrome-mesh relative z-30 flex h-20 shrink-0 items-center gap-3 px-4 shadow-[0_1px_0_rgba(255,255,255,0.06)]">
+        <ForgeLockup />
+        <span className="hidden h-9 w-px shrink-0 bg-white/15 md:block" />
+        <ClientChip className="hidden md:flex" />
 
-        {/* center: area switch */}
-        <div className="hidden items-center gap-1 rounded-xl glass p-1 md:flex">
-          <AreaTab label="Foundation" active={area === 'foundation'} onClick={() => setView('overview')} />
-          <AreaTab label="Pipeline" active={area === 'pipeline'} onClick={() => setView('step-1')} />
-        </div>
+        {/* one floating pill, centered in the open space between brand and status */}
+        <nav className="flex min-w-0 flex-1 items-center justify-center">
+          <UnifiedNav
+            area={area}
+            currentStep={currentStep}
+            activeView={activeView}
+            pills={pills}
+            onPick={setView}
+          />
+        </nav>
 
         {/* right: status + actions */}
-        <div className="flex items-center gap-2.5">
-          <span className="hidden items-center gap-1.5 rounded-lg glass px-2.5 py-1.5 font-mono text-[12px] text-navy-200 lg:inline-flex">
+        <div className="ml-auto flex items-center gap-2.5">
+          <span className="hidden items-center gap-1.5 rounded-lg glass px-2.5 py-1.5 font-mono text-[12px] text-navy-200 2xl:inline-flex">
             <span className="h-1.5 w-1.5 rounded-full bg-straive-500 shadow-brand-glow" />
             {friendlyModel(settings.models.text) || 'no model set'}
           </span>
@@ -105,176 +145,145 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
       </header>
 
-      {/* ── Body: sidebar + content ────────────────────────────── */}
+      {/* ── Body: content + router dock ─────────────────────────── */}
       <div className="flex min-h-0 flex-1">
-        {/* sidebar */}
-        <nav
+        <main className="min-w-0 flex-1 overflow-y-auto p-6 lg:p-8">{children}</main>
+        {routerOpen && <ModelRouterConsole />}
+      </div>
+    </div>
+  )
+}
+
+const NAV_DIVIDER = <span className="mx-1.5 h-8 w-px shrink-0 bg-white/10" />
+
+/**
+ * One floating pill.
+ *
+ * Layout adapts to the active area:
+ *  - Foundation active → [Foundation] · foundation sub-pills · | · [Editorial Lab]
+ *    (Foundation groups with its sub-pills on the left; Editorial Lab sits at the
+ *     far right as the "jump to the pipeline" switch).
+ *  - Editorial Lab active → [Foundation] [Editorial Lab] · | · pipeline sub-pills.
+ *
+ * Two selected colours: the active **area** tab glows Straive-orange; the active
+ * **sub-pill** glows blue (info) so the primary and secondary selections read as
+ * distinct. Completed pipeline steps tint their icon green.
+ */
+function UnifiedNav({
+  area,
+  currentStep,
+  activeView,
+  pills,
+  onPick,
+}: {
+  area: Area
+  currentStep: number | null
+  activeView: ViewId
+  pills: PillItem[]
+  onPick: (v: ViewId) => void
+}) {
+  const foundationTab = TOP_NAV[0]
+  const editorialTab = TOP_NAV[1]
+
+  const renderToggle = (tab: TopTab) => {
+    const isActive = area === tab.key
+    const Icon = tab.icon
+    return (
+      <button
+        key={tab.key}
+        type="button"
+        onClick={() =>
+          onPick(tab.key === 'pipeline' && currentStep ? activeView : tab.landing)
+        }
+        title={tab.label}
+        aria-current={isActive ? 'page' : undefined}
+        className={cn(
+          'group flex h-14 shrink-0 items-center rounded-2xl px-5 outline-none transition-all duration-300 ease-out',
+          isActive
+            ? 'bg-gradient-to-b from-straive-400 to-straive-600 text-white shadow-brand-glow'
+            : 'hover:bg-white/10',
+        )}
+      >
+        <Icon
+          size={28}
           className={cn(
-            'no-print flex shrink-0 flex-col bg-navy-800 transition-[width] duration-200 ease-out',
-            collapsed ? 'w-[68px]' : 'w-64',
+            'shrink-0 transition-colors duration-300',
+            isActive
+              ? 'text-white drop-shadow-[0_1px_1px_rgba(0,0,0,0.3)]'
+              : 'text-navy-300 group-hover:text-white',
           )}
-        >
-          <div className="flex-1 overflow-y-auto overflow-x-hidden px-3 py-4">
-            <NavGroup
-              label="Foundation"
-              items={FOUNDATION}
-              active={activeView}
-              onPick={setView}
-              collapsed={collapsed}
-            />
-            <NavGroup
-              label="Pipeline"
-              items={PIPELINE}
-              active={activeView}
-              onPick={setView}
-              collapsed={collapsed}
-              className="mt-6"
-            />
-          </div>
-
-          <div className="border-t border-white/10 p-3">
-            <NavButton
-              item={SETTINGS_NAV}
-              active={activeView === 'settings'}
-              onPick={setView}
-              collapsed={collapsed}
-            />
-            {!collapsed && (
-              <>
-                <div className="mt-3 flex items-center justify-between px-2.5 text-[11px]">
-                  <span className="text-navy-300">Brand</span>
-                  <span className="font-semibold text-navy-100">{profile.brandName}</span>
-                </div>
-                <div className="mt-1 px-2.5 text-[10px] text-navy-400">
-                  Synthetic · illustrative data
-                </div>
-              </>
-            )}
-          </div>
-        </nav>
-
-        {/* content column */}
-        <div className="flex min-w-0 flex-1 flex-col">
-          {currentStep && (
-            <div className="no-print shrink-0 border-b border-ink-200 bg-white px-8 py-4">
-              <StepRail current={currentStep} onPick={(n) => setView(`step-${n}` as ViewId)} />
-            </div>
-          )}
-
-          <div className="flex min-h-0 flex-1">
-            <main className="min-w-0 flex-1 overflow-y-auto p-6 lg:p-8">{children}</main>
-            {routerOpen && <ModelRouterConsole />}
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function AreaTab({
-  label,
-  active,
-  onClick,
-}: {
-  label: string
-  active: boolean
-  onClick: () => void
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={cn(
-        'rounded-lg px-4 py-1.5 text-[13px] font-semibold transition',
-        active ? 'bg-white text-navy-900 shadow-sm' : 'text-navy-200 hover:text-white',
-      )}
-    >
-      {label}
-    </button>
-  )
-}
-
-function NavGroup({
-  label,
-  items,
-  active,
-  onPick,
-  collapsed,
-  className,
-}: {
-  label: string
-  items: NavItem[]
-  active: ViewId
-  onPick: (v: ViewId) => void
-  collapsed: boolean
-  className?: string
-}) {
-  return (
-    <div className={className}>
-      {collapsed ? (
-        <div className="mx-2 mb-2 h-px bg-white/10" />
-      ) : (
-        <div className="px-3 pb-2 text-[10px] font-bold uppercase tracking-wider text-navy-400">
-          {label}
-        </div>
-      )}
-      <div className="space-y-1">
-        {items.map((item) => (
-          <NavButton
-            key={item.id}
-            item={item}
-            active={active === item.id}
-            onPick={onPick}
-            collapsed={collapsed}
-          />
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function NavButton({
-  item,
-  active,
-  onPick,
-  collapsed,
-}: {
-  item: NavItem
-  active: boolean
-  onPick: (v: ViewId) => void
-  collapsed: boolean
-}) {
-  const Icon = item.icon
-  return (
-    <button
-      onClick={() => onPick(item.id)}
-      title={collapsed ? item.label : undefined}
-      className={cn(
-        'group relative flex w-full items-center gap-2.5 rounded-lg py-2 text-left text-[13px] transition',
-        collapsed ? 'justify-center px-0' : 'pl-3 pr-2',
-        active ? 'bg-white/10 text-white' : 'text-navy-200 hover:bg-white/5 hover:text-white',
-      )}
-    >
-      {active && (
-        <span className="absolute inset-y-1.5 left-0 w-1 rounded-full bg-straive-500" />
-      )}
-      <Icon
-        size={18}
-        className={active ? 'text-straive-400' : 'text-navy-300 group-hover:text-navy-100'}
-      />
-      {!collapsed && <span className="flex-1 truncate font-medium">{item.label}</span>}
-      {!collapsed && item.status === 'soon' && (
+        />
         <span
           className={cn(
-            'rounded px-1 py-0.5 text-[9px] font-bold uppercase tracking-wide',
-            active ? 'bg-white/15 text-navy-100' : 'bg-white/5 text-navy-400',
+            'ml-3 whitespace-nowrap text-[17px] font-semibold transition-colors duration-300',
+            isActive ? 'text-white' : 'text-navy-200 group-hover:text-white',
           )}
         >
-          soon
+          {tab.label}
         </span>
+      </button>
+    )
+  }
+
+  const renderPill = (it: PillItem) => {
+    const Icon = it.icon
+    const isActive = it.state === 'active'
+    return (
+      <button
+        key={it.id}
+        type="button"
+        onClick={() => onPick(it.id)}
+        title={it.label}
+        aria-current={isActive ? 'page' : undefined}
+        className={cn(
+          'group flex h-14 items-center rounded-2xl px-4 outline-none transition-all duration-300 ease-out',
+          isActive
+            ? 'bg-gradient-to-b from-[#3a8fd8] to-info text-white shadow-[0_10px_30px_-8px_rgba(42,127,208,0.55)]'
+            : 'hover:bg-white/10',
+        )}
+      >
+        <Icon
+          size={26}
+          className={cn(
+            'shrink-0 transition-colors duration-300',
+            isActive
+              ? 'text-white drop-shadow-[0_1px_1px_rgba(0,0,0,0.3)]'
+              : it.state === 'done'
+                ? 'text-emerald-400'
+                : 'text-navy-300 group-hover:text-white',
+          )}
+        />
+        <span
+          className={cn(
+            'overflow-hidden whitespace-nowrap text-[15px] font-semibold transition-all duration-300 ease-out',
+            isActive ? 'ml-2 max-w-[160px] opacity-100' : 'ml-0 max-w-0 opacity-0',
+          )}
+        >
+          {it.label}
+        </span>
+      </button>
+    )
+  }
+
+  return (
+    <div className="flex min-w-0 items-center gap-2 rounded-2xl bg-white/5 p-2 ring-1 ring-white/10 backdrop-blur-md">
+      {/* Foundation always leads */}
+      {renderToggle(foundationTab)}
+
+      {/* Editorial Lab sits inline (left) whenever Foundation is NOT the active area */}
+      {area !== 'foundation' && renderToggle(editorialTab)}
+
+      {/* active area's sub-pills */}
+      {pills.length > 0 && NAV_DIVIDER}
+      {pills.map(renderPill)}
+
+      {/* in the Foundation view, Editorial Lab is pushed to the far right */}
+      {area === 'foundation' && (
+        <>
+          {NAV_DIVIDER}
+          {renderToggle(editorialTab)}
+        </>
       )}
-      {collapsed && item.status === 'soon' && (
-        <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-straive-500/70" />
-      )}
-    </button>
+    </div>
   )
 }
