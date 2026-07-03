@@ -662,7 +662,8 @@ function FindingRow({
           </Badge>
         )}
       </div>
-      <div className="mt-1 truncate text-[11px] text-ink-400">
+      <div className="mt-1 truncate text-[11px] italic text-ink-500">“{issue.snippet}”</div>
+      <div className="truncate text-[10px] text-ink-400">
         {issue.element === 'visual' ? `Visual · ${issue.elementRef}` : 'Copy'} · {issue.citation}
       </div>
     </button>
