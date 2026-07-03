@@ -393,6 +393,12 @@ export interface VisualAsset {
   textModelLabel: string
   textMode: CallMode
   safety: VisualSafety
+  /** how the brand-safety read was produced: a vision-model look at the image,
+   *  or the deterministic text heuristic (demo / non-live images) */
+  safetyModelLabel?: string
+  safetyMode?: CallMode
+  /** set once an editor has hand-edited the caption or alt text */
+  edited?: boolean
   generatedAt: number
 }
 

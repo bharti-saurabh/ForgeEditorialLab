@@ -100,6 +100,36 @@ const RISKY_TERMS = [
   'unrealistic',
 ]
 
+// ── Vision-model brand-safety read (looks at the actual rendered image) ──────
+
+const SAFETY_SCHEMA = `Return ONLY JSON (no fences):
+{ "status": "pass" | "review", "notes": ["short, specific observations about net impression"] }`
+
+export const SAFETY_VISION_SYSTEM = `You are a brand + marketing-compliance reviewer for a regulated U.S. card issuer. You look at a generated marketing image and judge its NET IMPRESSION — what an ordinary consumer would take away — not just its literal contents. Flag (status "review") anything that implies guaranteed wealth or outcomes, conspicuous luxury/opulence, exclusion of protected groups, baked-in text or logos, or off-brand styling; otherwise "pass". Be concrete and brief. This is decision support, not a legal ruling. ${SAFETY_SCHEMA}`
+
+/** Instruction paired with the image for the vision-model safety read. */
+export function buildSafetyVisionPrompt(profile: BrandProfile, caption: string): string {
+  return `${buildVisualContext(profile)}
+
+Assess this generated image for ${profile.brandName}. Consider net impression against UDAAP/brand concerns: does it imply guaranteed wealth or outcomes, show conspicuous luxury, exclude anyone, bake in text/logos, or drift off-brand? The intended caption is: "${caption}".
+${SAFETY_SCHEMA}`
+}
+
+/** Accessibility check on alt text — deterministic, no model needed. */
+export function assessAltText(altText: string, title: string): { ok: boolean; notes: string[] } {
+  const t = altText.trim()
+  const notes: string[] = []
+  if (!t) return { ok: false, notes: ['Missing alt text — screen readers will skip this image.'] }
+  if (t.length < 10) notes.push('Very short — describe the scene, not just a label.')
+  if (t.length > 125) notes.push(`Long (${t.length} chars) — aim for ≤125 so screen readers aren’t verbose.`)
+  if (/^(image|picture|photo|graphic) of/i.test(t))
+    notes.push('Avoid "image of…" — screen readers already announce it as an image.')
+  if (t.toLowerCase() === title.trim().toLowerCase())
+    notes.push('Same as the title — alt text should describe the visual, not repeat the headline.')
+  if (!notes.length) notes.push('Descriptive length and phrasing look good.')
+  return { ok: notes.length === 1 && notes[0].startsWith('Descriptive'), notes }
+}
+
 /** Deterministic brand-safety read on an image prompt/caption. */
 export function assessBrandSafety(text: string, profile: BrandProfile): VisualSafety {
   const lower = text.toLowerCase()

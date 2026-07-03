@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useAppStore } from '@/store/useAppStore'
 import { Card, CardBody, CardHeader } from '@/components/Card'
 import { Button } from '@/components/Button'
@@ -17,14 +17,19 @@ import {
   buildVisualTextPrompt,
   demoVisualText,
   assessBrandSafety,
+  assessAltText,
+  SAFETY_VISION_SYSTEM,
+  buildSafetyVisionPrompt,
   VISUAL_TEXT_SYSTEM,
   type VisualSlot,
 } from '@/lib/prompts/visual'
 import { buildBrandMockSvg } from '@/lib/visualMock'
-import { runImage, runChat } from '@/lib/router/router'
+import { runImage, runChat, runVision } from '@/lib/router/router'
+import { scanText } from '@/lib/complianceEngine'
+import { SEED_RULEBOOK } from '@/seed/rulebook'
 import { parseJsonLoose } from '@/lib/json'
 import { uid, fmtMs } from '@/lib/format'
-import type { VisualAsset } from '@/types'
+import type { VisualAsset, VisualSafety } from '@/types'
 import {
   IconImage,
   IconBolt,
@@ -141,7 +146,28 @@ export function VisualAssetsView() {
       const parsed =
         parseJsonLoose<{ caption?: string; altText?: string }>(txt.text) ??
         demoVisualText(profile, headline, slot)
-      const safety = assessBrandSafety(`${prompt} ${parsed.caption ?? ''}`, profile)
+      const caption = parsed.caption ?? ''
+
+      // 3) brand-safety read. A live image gets a real VISION look at the
+      // rendered pixels; demo/mock images (SVG data URLs a vision model can't
+      // read) fall back to the deterministic text heuristic.
+      let safety = assessBrandSafety(`${prompt} ${caption}`, profile)
+      let safetyModelLabel: VisualAsset['safetyModelLabel']
+      let safetyMode: VisualAsset['safetyMode']
+      if (img.mode === 'live') {
+        const vis = await runVision({
+          step: `Step 3 · ${slot.title} safety`,
+          text: buildSafetyVisionPrompt(profile, caption),
+          imageUrl: img.url,
+          system: SAFETY_VISION_SYSTEM,
+          reason: 'Vision model — reads the rendered image for net-impression / brand-safety risk.',
+          demo: () => JSON.stringify(assessBrandSafety(`${prompt} ${caption}`, profile)),
+        })
+        const parsedSafety = parseJsonLoose<VisualSafety>(vis.text)
+        if (parsedSafety?.status && Array.isArray(parsedSafety.notes)) safety = parsedSafety
+        safetyModelLabel = vis.entry.modelLabel
+        safetyMode = vis.mode
+      }
 
       const base: Omit<VisualAsset, 'id'> = {
         role: slot.role,
@@ -151,11 +177,13 @@ export function VisualAssetsView() {
         imageModelLabel: img.entry.modelLabel,
         imageMode: img.mode,
         imageLatencyMs: img.entry.latencyMs,
-        caption: parsed.caption ?? '',
+        caption,
         altText: parsed.altText ?? '',
         textModelLabel: txt.entry.modelLabel,
         textMode: txt.mode,
         safety,
+        safetyModelLabel,
+        safetyMode,
         generatedAt: img.entry.ts,
       }
 
@@ -275,6 +303,8 @@ export function VisualAssetsView() {
                   running={runningKey === v.id}
                   disabled={!!runningKey}
                   onPromptChange={(prompt) => updateVisual(v.id, { prompt })}
+                  onCaptionChange={(caption) => updateVisual(v.id, { caption, edited: true })}
+                  onAltChange={(altText) => updateVisual(v.id, { altText, edited: true })}
                   onRegenerate={() => generate(slotForVisual(v), v.prompt, v.id)}
                   onRemove={() => removeVisual(v.id)}
                 />
@@ -321,6 +351,8 @@ function VisualCard({
   running,
   disabled,
   onPromptChange,
+  onCaptionChange,
+  onAltChange,
   onRegenerate,
   onRemove,
 }: {
@@ -328,11 +360,18 @@ function VisualCard({
   running: boolean
   disabled: boolean
   onPromptChange: (p: string) => void
+  onCaptionChange: (c: string) => void
+  onAltChange: (a: string) => void
   onRegenerate: () => void
   onRemove: () => void
 }) {
   const [showPrompt, setShowPrompt] = useState(false)
-  const safe = visual.safety.status === 'pass'
+  const [editing, setEditing] = useState(false)
+  const captionIssues = useMemo(
+    () => scanText(visual.caption, SEED_RULEBOOK, 'copy'),
+    [visual.caption],
+  )
+  const altCheck = useMemo(() => assessAltText(visual.altText, visual.title), [visual.altText, visual.title])
   return (
     <Card>
       <div className="grid gap-0 md:grid-cols-2">
@@ -371,55 +410,58 @@ function VisualCard({
               <Badge tone={visual.role === 'hero' ? 'navy' : 'neutral'} className="capitalize">
                 {visual.role}
               </Badge>
+              {visual.edited && <Badge tone="info">Edited</Badge>}
             </div>
-            <button
-              onClick={onRemove}
-              aria-label="Remove visual"
-              className="text-ink-300 transition hover:text-crit"
-            >
-              <IconTrash size={15} />
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setEditing((e) => !e)}
+                className="rounded px-1.5 py-0.5 text-[11px] font-medium text-ink-500 transition hover:bg-ink-100 hover:text-ink-800"
+              >
+                {editing ? 'Done' : 'Edit text'}
+              </button>
+              <button
+                onClick={onRemove}
+                aria-label="Remove visual"
+                className="text-ink-300 transition hover:text-crit"
+              >
+                <IconTrash size={15} />
+              </button>
+            </div>
           </div>
 
           <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-400">
             Caption
           </div>
-          <p className="mb-3 text-sm text-ink-700">{visual.caption}</p>
+          {editing ? (
+            <textarea
+              value={visual.caption}
+              onChange={(e) => onCaptionChange(e.target.value)}
+              rows={2}
+              className="mb-3 w-full resize-y rounded-lg border border-ink-200 bg-white px-3 py-2 text-sm text-ink-700 focus:border-straive-400 focus:outline-none focus:ring-2 focus:ring-straive-500/20"
+            />
+          ) : (
+            <p className="mb-3 text-sm text-ink-700">{visual.caption}</p>
+          )}
 
           <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-400">
             Alt text
           </div>
-          <p className="mb-3 text-xs italic text-ink-500">{visual.altText}</p>
+          {editing ? (
+            <textarea
+              value={visual.altText}
+              onChange={(e) => onAltChange(e.target.value)}
+              rows={2}
+              className="mb-3 w-full resize-y rounded-lg border border-ink-200 bg-white px-3 py-2 text-xs text-ink-600 focus:border-straive-400 focus:outline-none focus:ring-2 focus:ring-straive-500/20"
+            />
+          ) : (
+            <p className="mb-3 text-xs italic text-ink-500">{visual.altText}</p>
+          )}
 
           <div className="mb-3 flex items-center gap-2">
             <ModelTag role="copy" modelLabel={visual.textModelLabel} mode={visual.textMode} />
           </div>
 
-          {/* brand safety */}
-          <div
-            className={cn(
-              'rounded-lg border px-3 py-2',
-              safe ? 'border-ok/25 bg-ok/5' : 'border-warn/30 bg-warn/5',
-            )}
-          >
-            <div
-              className={cn(
-                'mb-1 flex items-center gap-1.5 text-xs font-semibold',
-                safe ? 'text-ok' : 'text-warn',
-              )}
-            >
-              {safe ? <IconShield size={14} /> : <IconAlert size={14} />}
-              Brand safety: {safe ? 'Pass' : 'Needs review'}
-            </div>
-            <ul className="space-y-0.5">
-              {visual.safety.notes.map((n, i) => (
-                <li key={i} className="flex items-start gap-1.5 text-[11px] text-ink-600">
-                  <IconCheck size={11} className="mt-0.5 shrink-0 text-ink-400" />
-                  {n}
-                </li>
-              ))}
-            </ul>
-          </div>
+          <VisualChecks visual={visual} captionIssues={captionIssues} altCheck={altCheck} />
 
           {/* prompt + regenerate */}
           <div className="mt-3">
@@ -453,6 +495,87 @@ function VisualCard({
         </div>
       </div>
     </Card>
+  )
+}
+
+/** Three labeled reads on a visual: image safety, caption compliance, alt-text a11y. */
+function VisualChecks({
+  visual,
+  captionIssues,
+  altCheck,
+}: {
+  visual: VisualAsset
+  captionIssues: ReturnType<typeof scanText>
+  altCheck: { ok: boolean; notes: string[] }
+}) {
+  const safe = visual.safety.status === 'pass'
+  const captionOk = captionIssues.length === 0
+  return (
+    <div className="space-y-2">
+      {/* image brand safety */}
+      <CheckBlock
+        ok={safe}
+        title={`Brand safety (image): ${safe ? 'Pass' : 'Needs review'}`}
+        extra={
+          visual.safetyModelLabel ? (
+            <ModelTag role="vision" modelLabel={visual.safetyModelLabel} mode={visual.safetyMode ?? 'demo'} />
+          ) : (
+            <span className="rounded bg-ink-100 px-1.5 py-0.5 text-[10px] font-medium text-ink-500">
+              Text heuristic
+            </span>
+          )
+        }
+        notes={visual.safety.notes}
+      />
+      {/* caption compliance (preview of the Step-4 engine) */}
+      <CheckBlock
+        ok={captionOk}
+        title={`Caption compliance: ${captionOk ? 'No risky terms' : `${captionIssues.length} flag(s)`}`}
+        notes={
+          captionOk
+            ? ['Caption carries no rule-triggering terms (preview — the gate is Step 4).']
+            : captionIssues.map((i) => `${i.title} — ${i.citation}`)
+        }
+      />
+      {/* alt-text accessibility */}
+      <CheckBlock
+        ok={altCheck.ok}
+        title={`Alt text (accessibility): ${altCheck.ok ? 'Good' : 'Review'}`}
+        notes={altCheck.notes}
+      />
+    </div>
+  )
+}
+
+function CheckBlock({
+  ok,
+  title,
+  extra,
+  notes,
+}: {
+  ok: boolean
+  title: string
+  extra?: ReactNode
+  notes: string[]
+}) {
+  return (
+    <div className={cn('rounded-lg border px-3 py-2', ok ? 'border-ok/25 bg-ok/5' : 'border-warn/30 bg-warn/5')}>
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <div className={cn('flex items-center gap-1.5 text-xs font-semibold', ok ? 'text-ok' : 'text-warn')}>
+          {ok ? <IconShield size={14} /> : <IconAlert size={14} />}
+          {title}
+        </div>
+        {extra}
+      </div>
+      <ul className="space-y-0.5">
+        {notes.map((n, i) => (
+          <li key={i} className="flex items-start gap-1.5 text-[11px] text-ink-600">
+            <IconCheck size={11} className="mt-0.5 shrink-0 text-ink-400" />
+            {n}
+          </li>
+        ))}
+      </ul>
+    </div>
   )
 }
 
