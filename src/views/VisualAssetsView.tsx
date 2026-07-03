@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useAppStore } from '@/store/useAppStore'
 import { Card, CardBody, CardHeader } from '@/components/Card'
 import { Button } from '@/components/Button'
@@ -7,7 +7,10 @@ import { SectionTitle, EmptyState } from '@/components/EmptyState'
 import { ModelTag } from '@/components/ModelTag'
 import { ExportButton } from '@/components/ExportButton'
 import { Disclaimer } from '@/components/Disclaimer'
-import { SEED_TOPIC_BACKLOG } from '@/seed/topicBacklog'
+import { ChannelChip } from '@/components/ChannelChip'
+import { PostPreview } from '@/components/PostPreview'
+import { channelSpec, isImageChannel } from '@/lib/channels'
+import { findTopic } from '@/lib/topics'
 import {
   suggestedSlots,
   buildImagePrompt,
@@ -44,19 +47,42 @@ export function VisualAssetsView() {
   const removeVisual = useAppStore((s) => s.removeVisual)
 
   const topic = useMemo(
-    () => SEED_TOPIC_BACKLOG.find((t) => t.id === pipeline.selectedTopicId) ?? null,
-    [pipeline.selectedTopicId],
+    () => findTopic(pipeline.selectedTopicId, pipeline.userTopics),
+    [pipeline.selectedTopicId, pipeline.userTopics],
   )
   const chosenDraft = pipeline.drafts.find((d) => d.id === pipeline.chosenDraftId) ?? null
   const headline = chosenDraft?.title ?? topic?.title ?? ''
-  const slots = useMemo(() => suggestedSlots(), [])
+  const primaryChannel = pipeline.primaryChannel
+  const channel = useMemo(() => channelSpec(primaryChannel), [primaryChannel])
+  const imageChannel = isImageChannel(primaryChannel)
+  const slots = useMemo(() => suggestedSlots(channel), [channel])
 
   const [slotPrompts, setSlotPrompts] = useState<string[]>(() =>
     topic ? slots.map((s) => buildImagePrompt(profile, topic, headline, s)) : [],
   )
   const [runningKey, setRunningKey] = useState<string | null>(null)
 
+  // Rebuild the editable slot prompts when the channel (and thus its slots)
+  // changes — a paid-social square prompt shouldn't linger after switching to blog.
+  useEffect(() => {
+    setSlotPrompts(topic ? slots.map((s) => buildImagePrompt(profile, topic, headline, s)) : [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [primaryChannel])
+
   const visuals = pipeline.visuals
+  const heroVisual = visuals.find((v) => v.role === 'hero') ?? visuals[0] ?? null
+
+  // Resolve a slot (size/ratio) for regenerating an existing visual.
+  const slotForVisual = (v: VisualAsset): VisualSlot =>
+    slots.find((s) => s.title === v.title) ??
+    slots[0] ?? {
+      role: v.role,
+      title: v.title,
+      intent: '',
+      size: v.role === 'hero' ? '1536x1024' : '1024x1024',
+      square: v.role !== 'hero',
+      ratio: v.role === 'hero' ? '16:9' : '1:1',
+    }
 
   if (!topic) {
     return (
@@ -83,7 +109,7 @@ export function VisualAssetsView() {
     if (!topic) return
     const key = existingId ?? `slot-${slot.title}`
     setRunningKey(key)
-    const square = slot.title === 'Social cutdown'
+    const square = slot.square
     const seed = Math.floor(performance.now()) % 999
     try {
       // 1) image (image model)
@@ -91,7 +117,7 @@ export function VisualAssetsView() {
         step: `Step 3 · ${slot.title}`,
         prompt,
         reason: 'Purpose-built image model — renders an on-brand visual from a grounded prompt.',
-        size: square ? '1024x1024' : '1536x1024',
+        size: slot.size,
         demo: () =>
           buildBrandMockSvg({
             profile,
@@ -156,7 +182,8 @@ export function VisualAssetsView() {
         description="On-brand hero + supporting visuals — prompts auto-built from the visual identity."
         actions={
           <div className="flex items-center gap-2">
-            {visuals.length > 0 && (
+            <ChannelChip />
+            {(visuals.length > 0 || !imageChannel) && (
               <Button
                 variant="primary"
                 size="sm"
@@ -184,80 +211,107 @@ export function VisualAssetsView() {
         </div>
       )}
 
-      {/* generator slots */}
-      <Card className="mb-5">
+      {imageChannel ? (
+        <>
+          {/* generator slots */}
+          <Card className="mb-5">
+            <CardHeader
+              icon={<IconImage size={18} />}
+              title="Visual set"
+              subtitle={`Aspect ratios for ${channel.label}. Each prompt is grounded in the brand palette, imagery style, and lockup rules.`}
+            />
+            <CardBody className="space-y-4">
+              {slots.map((slot, i) => (
+                <div key={slot.title} className="rounded-xl border border-ink-200 bg-ink-50/50 p-3">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold text-ink-900">{slot.title}</span>
+                      <Badge tone={slot.role === 'hero' ? 'navy' : 'neutral'} className="capitalize">
+                        {slot.role}
+                      </Badge>
+                    </div>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      loading={runningKey === `slot-${slot.title}`}
+                      icon={runningKey !== `slot-${slot.title}` ? <IconBolt size={14} /> : undefined}
+                      disabled={!!runningKey}
+                      onClick={() => generate(slot, slotPrompts[i] ?? '')}
+                    >
+                      Generate
+                    </Button>
+                  </div>
+                  <textarea
+                    value={slotPrompts[i] ?? ''}
+                    onChange={(e) =>
+                      setSlotPrompts((p) => p.map((v, idx) => (idx === i ? e.target.value : v)))
+                    }
+                    rows={3}
+                    className="w-full resize-y rounded-lg border border-ink-200 bg-white px-3 py-2 font-mono text-xs leading-relaxed text-ink-700 focus:border-straive-400 focus:outline-none focus:ring-2 focus:ring-straive-500/20"
+                  />
+                </div>
+              ))}
+            </CardBody>
+          </Card>
+
+          <div className="mb-5 grid gap-3 sm:grid-cols-2">
+            <Disclaimer kind="legal" />
+            <Disclaimer kind="illustrative" />
+          </div>
+
+          {/* generated visuals */}
+          {visuals.length === 0 ? (
+            <EmptyState
+              icon={<IconImage size={20} />}
+              title="No visuals yet"
+              description="Generate a hero and supporting visuals above. Each pairs the image model's render with a text-model caption and a brand-safety read."
+            />
+          ) : (
+            <div className="space-y-4">
+              {visuals.map((v) => (
+                <VisualCard
+                  key={v.id}
+                  visual={v}
+                  running={runningKey === v.id}
+                  disabled={!!runningKey}
+                  onPromptChange={(prompt) => updateVisual(v.id, { prompt })}
+                  onRegenerate={() => generate(slotForVisual(v), v.prompt, v.id)}
+                  onRemove={() => removeVisual(v.id)}
+                />
+              ))}
+            </div>
+          )}
+        </>
+      ) : (
+        /* text-ad surface (SEM): no image to generate — the preview IS the asset */
+        <Card className="mb-5">
+          <CardHeader
+            icon={<IconImage size={18} />}
+            title={`${channel.label} — text ad`}
+            subtitle="This surface is text-only. There's no hero image to generate; the posted preview below is the deliverable."
+          />
+          <CardBody>
+            <Disclaimer kind="legal" />
+          </CardBody>
+        </Card>
+      )}
+
+      {/* posted preview — how the piece looks on this surface, BEFORE the gate */}
+      <Card className="mt-5">
         <CardHeader
           icon={<IconImage size={18} />}
-          title="Visual set"
-          subtitle="Each prompt is grounded in the brand palette, imagery style, and lockup rules. Edit and generate."
+          title="Posted preview"
+          subtitle="How this piece will appear on the chosen channel — reviewed here before it reaches compliance."
         />
-        <CardBody className="space-y-4">
-          {slots.map((slot, i) => (
-            <div key={slot.title} className="rounded-xl border border-ink-200 bg-ink-50/50 p-3">
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-semibold text-ink-900">{slot.title}</span>
-                  <Badge tone={slot.role === 'hero' ? 'navy' : 'neutral'} className="capitalize">
-                    {slot.role}
-                  </Badge>
-                </div>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  loading={runningKey === `slot-${slot.title}`}
-                  icon={runningKey !== `slot-${slot.title}` ? <IconBolt size={14} /> : undefined}
-                  disabled={!!runningKey}
-                  onClick={() => generate(slot, slotPrompts[i] ?? '')}
-                >
-                  Generate
-                </Button>
-              </div>
-              <textarea
-                value={slotPrompts[i] ?? ''}
-                onChange={(e) =>
-                  setSlotPrompts((p) => p.map((v, idx) => (idx === i ? e.target.value : v)))
-                }
-                rows={3}
-                className="w-full resize-y rounded-lg border border-ink-200 bg-white px-3 py-2 font-mono text-xs leading-relaxed text-ink-700 focus:border-straive-400 focus:outline-none focus:ring-2 focus:ring-straive-500/20"
-              />
-            </div>
-          ))}
+        <CardBody>
+          <PostPreview
+            channel={primaryChannel}
+            profile={profile}
+            draft={chosenDraft}
+            visual={heroVisual}
+          />
         </CardBody>
       </Card>
-
-      <div className="mb-5 grid gap-3 sm:grid-cols-2">
-        <Disclaimer kind="legal" />
-        <Disclaimer kind="illustrative" />
-      </div>
-
-      {/* generated visuals */}
-      {visuals.length === 0 ? (
-        <EmptyState
-          icon={<IconImage size={20} />}
-          title="No visuals yet"
-          description="Generate a hero and supporting visuals above. Each pairs the image model's render with a text-model caption and a brand-safety read."
-        />
-      ) : (
-        <div className="space-y-4">
-          {visuals.map((v) => (
-            <VisualCard
-              key={v.id}
-              visual={v}
-              running={runningKey === v.id}
-              disabled={!!runningKey}
-              onPromptChange={(prompt) => updateVisual(v.id, { prompt })}
-              onRegenerate={() =>
-                generate(
-                  { role: v.role, title: v.title, intent: '' },
-                  v.prompt,
-                  v.id,
-                )
-              }
-              onRemove={() => removeVisual(v.id)}
-            />
-          ))}
-        </div>
-      )}
     </div>
   )
 }
@@ -285,11 +339,18 @@ function VisualCard({
         {/* image side */}
         <div className="flex flex-col border-b border-ink-100 md:border-b-0 md:border-r">
           <div className="relative bg-ink-100">
-            <img
-              src={visual.url}
-              alt={visual.altText || visual.title}
-              className={cn('w-full object-cover', running && 'opacity-40')}
-            />
+            {visual.url ? (
+              <img
+                src={visual.url}
+                alt={visual.altText || visual.title}
+                className={cn('w-full object-cover', running && 'opacity-40')}
+              />
+            ) : (
+              <div className="flex aspect-[3/2] w-full flex-col items-center justify-center gap-1 px-4 text-center text-xs text-ink-500">
+                <span className="font-medium text-ink-600">Image not stored across reloads</span>
+                <span>Generated images stay in memory only — regenerate to view it again.</span>
+              </div>
+            )}
             {running && (
               <div className="absolute inset-0 flex items-center justify-center">
                 <span className="h-8 w-8 animate-spin rounded-full border-[3px] border-white border-t-transparent" />

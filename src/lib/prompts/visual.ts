@@ -5,6 +5,7 @@
 
 import type { BrandProfile, TopicOpportunity, VisualSafety } from '@/types'
 import { buildVisualContext } from '@/lib/brand/grounding'
+import { channelSpec, type ChannelSpec } from '@/lib/channels'
 
 export type VisualRole = 'hero' | 'supporting'
 
@@ -12,15 +13,30 @@ export interface VisualSlot {
   role: VisualRole
   title: string
   intent: string
+  /** image-generation size for this slot (from the channel's aspect ratio) */
+  size: string
+  /** square crop → drives the demo mock + preview framing */
+  square: boolean
+  /** display ratio, e.g. "1:1" */
+  ratio: string
 }
 
-/** The default visual set suggested for a piece of content. */
-export function suggestedSlots(): VisualSlot[] {
-  return [
-    { role: 'hero', title: 'Hero image', intent: 'lead editorial image at the top of the piece' },
-    { role: 'supporting', title: 'Supporting visual', intent: 'inline concept illustration for a key section' },
-    { role: 'supporting', title: 'Social cutdown', intent: 'square social-promo variant' },
-  ]
+/**
+ * The visual set for a piece — derived from the publish channel's aspect ratios.
+ * Text-ad surfaces (SEM) return no slots. The first ratio becomes the hero.
+ */
+export function suggestedSlots(channel: ChannelSpec = channelSpec('blog')): VisualSlot[] {
+  return channel.ratios.map((r, i) => ({
+    role: i === 0 ? 'hero' : 'supporting',
+    title: i === 0 ? `${channel.short} hero (${r.ratio})` : `${r.label}`,
+    intent:
+      i === 0
+        ? `lead ${channel.label} image (${r.ratio})`
+        : `supporting ${channel.label} variant (${r.ratio})`,
+    size: r.size,
+    square: r.square,
+    ratio: r.ratio,
+  }))
 }
 
 /** Auto-build an on-brand image prompt from the visual identity + content. */
@@ -37,7 +53,7 @@ Requirements:
 - ${slot.role === 'hero' ? 'Editorial hero framing with room for a headline; ' : ''}on-palette, clean composition with strong focal hierarchy.
 - Real, diverse people in a candid, authentic everyday moment; warm natural light; aspirational but attainable.
 - No text baked into the image, no logos, no depiction of guaranteed wealth or unrealistic outcomes.
-${slot.title === 'Social cutdown' ? '- Square 1:1 crop.' : '- Landscape crop.'}`
+- ${slot.square ? 'Square 1:1 crop.' : `${slot.ratio} crop.`}`
 }
 
 const TEXT_SCHEMA = `Return ONLY JSON (no fences):

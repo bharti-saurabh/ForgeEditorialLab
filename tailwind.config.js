@@ -94,6 +94,11 @@ export default {
           '0%': { transform: 'translateX(100%)' },
           '100%': { transform: 'translateX(0)' },
         },
+        'feed-in': {
+          '0%': { opacity: '0', transform: 'translateY(-6px)' },
+          '60%': { opacity: '1' },
+          '100%': { opacity: '1', transform: 'translateY(0)' },
+        },
         shimmer: {
           '0%': { backgroundPosition: '-400px 0' },
           '100%': { backgroundPosition: '400px 0' },
@@ -114,6 +119,7 @@ export default {
       animation: {
         'fade-in': 'fade-in 0.2s ease-out',
         'slide-in': 'slide-in 0.25s ease-out',
+        'feed-in': 'feed-in 0.5s ease-out',
         shimmer: 'shimmer 1.4s infinite linear',
         'pulse-dot': 'pulse-dot 1.8s ease-in-out infinite',
         float: 'float 9s ease-in-out infinite',

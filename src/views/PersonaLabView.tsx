@@ -19,7 +19,7 @@ import { ModelTag } from '@/components/ModelTag'
 import { ExportButton } from '@/components/ExportButton'
 import { Disclaimer } from '@/components/Disclaimer'
 import { SEED_SEGMENTS } from '@/seed/segments'
-import { SEED_TOPIC_BACKLOG } from '@/seed/topicBacklog'
+import { findTopic } from '@/lib/topics'
 import { currentScore } from '@/lib/complianceEngine'
 import {
   LENS_ORDER,
@@ -73,8 +73,8 @@ export function PersonaLabView() {
   const requestRevisions = useAppStore((s) => s.requestRevisions)
 
   const topic = useMemo(
-    () => SEED_TOPIC_BACKLOG.find((t) => t.id === pipeline.selectedTopicId) ?? null,
-    [pipeline.selectedTopicId],
+    () => findTopic(pipeline.selectedTopicId, pipeline.userTopics),
+    [pipeline.selectedTopicId, pipeline.userTopics],
   )
   const draft = pipeline.drafts.find((d) => d.id === pipeline.chosenDraftId) ?? null
   const compliance = pipeline.compliance

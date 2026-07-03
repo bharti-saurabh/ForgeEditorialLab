@@ -6,11 +6,13 @@
 // ───────────────────────────────────────────────────────────────────────────
 
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { persist, createJSONStorage } from 'zustand/middleware'
 import type {
   AssetAnalysis,
   BrandAsset,
+  BriefInput,
   BrandProfile,
+  ChannelKey,
   ComplianceState,
   ContentBrief,
   DraftVariant,
@@ -24,10 +26,13 @@ import type {
   RouterLogEntry,
   Settings,
   SignOff,
+  TopicOpportunity,
   TopicRead,
   VisualAsset,
   VoiceControls,
 } from '@/types'
+import { channelForFormat } from '@/lib/channels'
+import { findTopic } from '@/lib/topics'
 import { DEFAULT_SETTINGS } from '@/seed/defaults'
 import { SEED_BRAND_ASSETS } from '@/seed/brandAssets'
 import { SEED_BRAND_PROFILE } from '@/seed/brandProfile'
@@ -94,11 +99,17 @@ interface AppState {
   clearRouterLog: () => void
 
   // ── pipeline actions ──
+  addUserTopic: (topic: TopicOpportunity) => void
+  removeUserTopic: (id: string) => void
   selectTopic: (id: string | null) => void
+  setPrimaryChannel: (channel: ChannelKey) => void
   setTopicRead: (read: TopicRead | null) => void
+  updateBriefInput: (patch: Partial<BriefInput>) => void
   setBrief: (brief: ContentBrief | null) => void
+  updateBrief: (patch: Partial<ContentBrief>) => void
   updateVoice: (patch: Partial<VoiceControls>) => void
   addDraft: (draft: DraftVariant) => void
+  updateDraft: (id: string, patch: Partial<DraftVariant>) => void
   removeDraft: (id: string) => void
   chooseDraft: (id: string | null) => void
   clearDrafts: () => void
@@ -142,6 +153,12 @@ export const DEFAULT_VOICE: VoiceControls = {
   length: 'standard',
 }
 
+export const DEFAULT_BRIEF_INPUT: BriefInput = {
+  workingTitle: '',
+  anglePreference: '',
+  mustInclude: '',
+}
+
 /** Deep-merge persisted settings over defaults so new fields always exist. */
 function mergeSettings(s: unknown): Settings {
   const p = (s ?? {}) as Partial<Settings>
@@ -154,8 +171,11 @@ function mergeSettings(s: unknown): Settings {
 }
 
 const EMPTY_PIPELINE: PipelineState = {
+  userTopics: [],
   selectedTopicId: null,
+  primaryChannel: 'blog',
   topicRead: null,
+  briefInput: DEFAULT_BRIEF_INPUT,
   brief: null,
   voice: DEFAULT_VOICE,
   drafts: [],
@@ -165,6 +185,69 @@ const EMPTY_PIPELINE: PipelineState = {
   publish: null,
   persona: null,
   revision: 0,
+}
+
+/** True for a base64/inline data URL (the heavy payload we don't persist). */
+const isDataUrl = (u?: string): u is string =>
+  typeof u === 'string' && u.startsWith('data:')
+
+function isQuotaError(err: unknown): boolean {
+  return (
+    err instanceof DOMException &&
+    (err.name === 'QuotaExceededError' ||
+      err.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+      err.code === 22 ||
+      err.code === 1014)
+  )
+}
+
+// localStorage has a ~5MB per-origin cap. Generated images (base64 data URLs)
+// are the heavy payload and are already excluded from the persisted snapshot
+// (see partialize), but this wrapper is the final safety net: a QuotaExceeded
+// (or private-mode) failure is swallowed so it can never propagate into app
+// logic. Previously a failed save fired synchronously inside addRouterLog's
+// set() — mid model-call — and surfaced as a bogus "Live call failed" in the
+// Model Router. Worst case now: the session isn't saved across reloads; the app
+// keeps working from in-memory state and the user is warned once.
+let warnedQuota = false
+const safeStorage = {
+  getItem: (name: string): string | null => {
+    try {
+      return localStorage.getItem(name)
+    } catch {
+      return null
+    }
+  },
+  setItem: (name: string, value: string): void => {
+    try {
+      localStorage.setItem(name, value)
+    } catch (err) {
+      if (isQuotaError(err)) {
+        // Keep the last good copy in storage; only warn (once), off the current
+        // set() call so we don't re-enter the store mid-update.
+        if (!warnedQuota) {
+          warnedQuota = true
+          setTimeout(() => {
+            useAppStore
+              .getState()
+              .pushToast(
+                'error',
+                'Browser storage is full — this session won’t be saved across reloads. Generated images aren’t persisted; use Reset data to clear older runs.',
+              )
+          }, 0)
+        }
+        return
+      }
+      throw err
+    }
+  },
+  removeItem: (name: string): void => {
+    try {
+      localStorage.removeItem(name)
+    } catch {
+      /* ignore */
+    }
+  },
 }
 
 export const useAppStore = create<AppState>()(
@@ -228,15 +311,33 @@ export const useAppStore = create<AppState>()(
         }),
       clearRouterLog: () => set({ routerLog: [] }),
 
+      addUserTopic: (topic) =>
+        set((s) => ({
+          pipeline: { ...s.pipeline, userTopics: [topic, ...s.pipeline.userTopics] },
+        })),
+      removeUserTopic: (id) =>
+        set((s) => ({
+          pipeline: {
+            ...s.pipeline,
+            userTopics: s.pipeline.userTopics.filter((t) => t.id !== id),
+            // If the removed topic was selected, clear the downstream selection.
+            selectedTopicId:
+              s.pipeline.selectedTopicId === id ? null : s.pipeline.selectedTopicId,
+          },
+        })),
       selectTopic: (id) =>
         set((s) => {
           // Switching to a different topic invalidates the downstream brief/drafts.
           const changed = id !== s.pipeline.selectedTopicId
+          // Pre-select the primary channel from the new topic's recommended format.
+          const topic = findTopic(id, s.pipeline.userTopics)
           return {
             pipeline: changed
               ? {
                   ...s.pipeline,
                   selectedTopicId: id,
+                  primaryChannel: channelForFormat(topic?.format),
+                  briefInput: DEFAULT_BRIEF_INPUT,
                   brief: null,
                   drafts: [],
                   chosenDraftId: null,
@@ -248,10 +349,23 @@ export const useAppStore = create<AppState>()(
               : { ...s.pipeline, selectedTopicId: id },
           }
         }),
+      setPrimaryChannel: (channel) =>
+        set((s) => ({ pipeline: { ...s.pipeline, primaryChannel: channel } })),
       setTopicRead: (read) =>
         set((s) => ({ pipeline: { ...s.pipeline, topicRead: read } })),
+      updateBriefInput: (patch) =>
+        set((s) => ({
+          pipeline: { ...s.pipeline, briefInput: { ...s.pipeline.briefInput, ...patch } },
+        })),
       setBrief: (brief) =>
         set((s) => ({ pipeline: { ...s.pipeline, brief } })),
+      updateBrief: (patch) =>
+        set((s) => ({
+          pipeline: {
+            ...s.pipeline,
+            brief: s.pipeline.brief ? { ...s.pipeline.brief, ...patch } : s.pipeline.brief,
+          },
+        })),
       updateVoice: (patch) =>
         set((s) => ({
           pipeline: { ...s.pipeline, voice: { ...s.pipeline.voice, ...patch } },
@@ -263,6 +377,13 @@ export const useAppStore = create<AppState>()(
             drafts: [...s.pipeline.drafts, draft],
             // auto-select the first draft produced
             chosenDraftId: s.pipeline.chosenDraftId ?? draft.id,
+          },
+        })),
+      updateDraft: (id, patch) =>
+        set((s) => ({
+          pipeline: {
+            ...s.pipeline,
+            drafts: s.pipeline.drafts.map((d) => (d.id === id ? { ...d, ...patch } : d)),
           },
         })),
       removeDraft: (id) =>
@@ -464,6 +585,7 @@ export const useAppStore = create<AppState>()(
     {
       name: 'forge-state-v1',
       version: 3,
+      storage: createJSONStorage(() => safeStorage),
       // Upgrade older persisted state so pre-Increment-4 pipelines (missing
       // publish/persona/revision) and pre-multi-provider settings (missing
       // baseUrls/imageApi) can't crash the app on rehydrate.
@@ -486,14 +608,25 @@ export const useAppStore = create<AppState>()(
           pipeline: { ...EMPTY_PIPELINE, ...(p.pipeline ?? {}) },
         }
       },
+      // Persist everything EXCEPT base64 image payloads — those (generated
+      // visuals + uploaded brand-asset images) are what blow past the ~5MB
+      // localStorage cap. They regenerate/re-upload on demand; metadata,
+      // captions, prompts, and safety reads are kept.
       partialize: (s) => ({
         settings: s.settings.persistKey
           ? s.settings
           : { ...s.settings, apiKey: '' },
-        brandRepo: s.brandRepo,
+        brandRepo: s.brandRepo.map((a) =>
+          isDataUrl(a.imageUrl) ? { ...a, imageUrl: undefined } : a,
+        ),
         brandProfile: s.brandProfile,
         routerLog: s.routerLog,
-        pipeline: s.pipeline,
+        pipeline: {
+          ...s.pipeline,
+          visuals: s.pipeline.visuals.map((v) =>
+            isDataUrl(v.url) ? { ...v, url: '' } : v,
+          ),
+        },
         activeView: s.activeView,
         sidebarCollapsed: s.sidebarCollapsed,
       }),

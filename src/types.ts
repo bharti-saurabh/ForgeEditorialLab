@@ -233,6 +233,52 @@ export type RecommendedFormat =
   | 'social'
   | 'landing-page'
 
+/** How a topic entered the backlog — drives the provenance badge in Step 1. */
+export type TopicOrigin = 'trending' | 'competitor-gap' | 'seasonal' | 'evergreen' | 'user'
+
+export type DemandTrend = 'rising' | 'steady' | 'falling'
+
+/** A cited, real-world source that surfaced a trend (kept honest + linkable). */
+export interface TopicSource {
+  publisher: string
+  url: string
+  /** 'YYYY-MM' */
+  date: string
+}
+
+/** A competitor publishing on this topic — the "what competitors are doing" signal. */
+export interface CompetitorRef {
+  name: string
+  url?: string
+}
+
+/**
+ * The evidence behind a topic's ranking — what makes the score feel *earned*.
+ * Rendered as an inline mini-viz + provenance in Step 1.
+ */
+export interface TopicSignals {
+  /** relative-interest series (oldest→newest) for the demand sparkline */
+  demandSeries: number[]
+  demandTrend: DemandTrend
+  /** when it trended, e.g. 'Apr–Jun 2026' */
+  trendWindow?: string
+  /** competitors currently publishing on this */
+  competitors: CompetitorRef[]
+  /** how many of our own Brand Memory assets already cover it (gap = competitors − ours) */
+  ourAssets: number
+  /** citation for the trend (a real article/report) */
+  source?: TopicSource
+}
+
+/** A recent competitor move shown in the Step 1 "Competitor watch" panel. */
+export interface CompetitorMove {
+  competitor: string
+  move: string
+  /** 'YYYY-MM' */
+  date: string
+  url: string
+}
+
 export interface TopicOpportunity {
   id: string
   title: string
@@ -247,6 +293,10 @@ export interface TopicOpportunity {
   onBrand: boolean
   offBrandReason?: string
   tags: string[]
+  /** provenance — how this opportunity was surfaced (defaults to evergreen) */
+  origin?: TopicOrigin
+  /** ranking evidence: demand trend, competitor coverage, source citation */
+  signals?: TopicSignals
 }
 
 // ── Pipeline run state (flows across steps; extended each increment) ─────────
@@ -273,6 +323,16 @@ export interface ContentBrief {
   modelLabel: string
   mode: CallMode
   generatedAt: number
+}
+
+/** Optional human direction fed into the brief generation (Step 2). */
+export interface BriefInput {
+  /** a working headline the editor wants the brief to steer toward */
+  workingTitle: string
+  /** a preferred angle/hook, if the editor has one in mind */
+  anglePreference: string
+  /** points the piece must include — newline-separated */
+  mustInclude: string
 }
 
 /** Brand-voice dials that shape the draft prompt (Step 2). */
@@ -303,6 +363,10 @@ export interface DraftVariant {
   brandMatch: BrandMatch
   wordCount: number
   latencyMs: number
+  /** token usage reported by the router (drives the cost estimate) */
+  usage?: TokenUsage
+  /** set once an editor has hand-edited or AI-refined this variant */
+  edited?: boolean
   generatedAt: number
 }
 
@@ -410,7 +474,7 @@ export interface ComplianceState {
 
 // ── Publish package (Step 5) ─────────────────────────────────────────────
 
-export type ChannelKey = 'blog' | 'linkedin' | 'email' | 'paid-social'
+export type ChannelKey = 'blog' | 'linkedin' | 'email' | 'paid-social' | 'sem'
 
 /** Lightweight per-channel compliance re-check on the adapted copy. */
 export interface ChannelRecheck {
@@ -514,10 +578,17 @@ export interface PersonaLabState {
 }
 
 export interface PipelineState {
+  /** user-added topic opportunities (Step 1), merged with the seed backlog */
+  userTopics: TopicOpportunity[]
   /** the topic the user took forward from Step 1 into Step 2+ */
   selectedTopicId: string | null
+  /** the surface this piece is authored FOR — drives brief, draft, visuals,
+   *  the posted preview, and the compliance review (Step 2 onward) */
+  primaryChannel: ChannelKey
   /** cached editorial read so it survives navigation */
   topicRead: TopicRead | null
+  /** optional human direction fed into brief generation (Step 2) */
+  briefInput: BriefInput
   /** the brief generated for the selected topic (Step 2) */
   brief: ContentBrief | null
   /** brand-voice dials for drafting */

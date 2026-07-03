@@ -21,7 +21,7 @@ import { SEED_BRAND_PROFILE } from '@/seed/brandProfile'
 import { SEED_TOPIC_BACKLOG } from '@/seed/topicBacklog'
 import { SEED_RULEBOOK } from '@/seed/rulebook'
 import { SEED_SEGMENTS } from '@/seed/segments'
-import { DEFAULT_VOICE } from '@/store/useAppStore'
+import { DEFAULT_VOICE, DEFAULT_BRIEF_INPUT } from '@/store/useAppStore'
 import { friendlyModel } from '@/lib/router/roles'
 import { brandMatchScore } from '@/lib/brand/grounding'
 import { disclosuresForTopic } from '@/lib/compliance'
@@ -227,13 +227,16 @@ export function buildCompletedPipeline(): PipelineState {
   }
 
   return {
+    userTopics: [],
     selectedTopicId: topic.id,
+    primaryChannel: 'blog',
     topicRead: {
       text: `The backlog favors "${topic.title}" — high consideration-stage demand with a direct product tie-in, balanced against a heavy disclosure load that the compliance gate is built to handle. Prioritized as the flagship piece for the period.`,
       modelLabel: friendlyModel(textModel),
       mode: 'demo',
       ranAt: now - 65 * 60 * 1000,
     },
+    briefInput: DEFAULT_BRIEF_INPUT,
     brief,
     voice,
     drafts: [draft],

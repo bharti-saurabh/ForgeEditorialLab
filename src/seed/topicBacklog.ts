@@ -1,10 +1,254 @@
-// Seed topic backlog — 14 ranked content opportunities for the default brand.
-// Consumed by Step 1 Topic Intelligence (Increment 2); authored now so Step 1
-// opens full. Synthetic / illustrative.
+// Seed topic backlog for Step 1 Topic Intelligence.
+//
+// Two kinds of rows:
+//  1. Evergreen/seasonal editorial staples (origin: evergreen | seasonal).
+//  2. "Trending" opportunities surfaced from real, cited public sources over the
+//     Apr–Jun 2026 window (origin: trending), each carrying a `signals` block —
+//     a demand series for the sparkline, competitor coverage, and a source link.
+//
+// Signal figures are compiled from public reporting (cited) as of mid-2026 and
+// are illustrative decision support — the opportunity score is deterministic and
+// a human editor picks what to take forward.
 
 import type { TopicOpportunity } from '@/types'
 
 export const SEED_TOPIC_BACKLOG: TopicOpportunity[] = [
+  // ── Trending: surfaced from recent search demand + competitor activity ──────
+  {
+    id: 'topic_hysa_fed_2026',
+    title: 'Fed holds rates in June 2026: how to lock in 4%+ savings now',
+    rationale:
+      'The Fed held at 3.50–3.75% and dropped its projected cut, so top high-yield savings still pays ~5% vs a ~0.38% national average — a live, high-intent rate-shopping moment for 360 Performance Savings.',
+    audienceSegment: 'Rate Shoppers',
+    funnelStage: 'consideration',
+    format: 'blog',
+    demand: 'High',
+    demandScore: 93,
+    difficulty: 'Medium',
+    complianceSensitivity: 'Medium',
+    onBrand: true,
+    tags: ['savings', 'apr', 'rates'],
+    origin: 'trending',
+    signals: {
+      demandSeries: [46, 52, 58, 70, 84, 95],
+      demandTrend: 'rising',
+      trendWindow: 'Apr–Jun 2026',
+      competitors: [
+        { name: 'Marcus', url: 'https://www.marcus.com/us/en/savings/high-yield-savings' },
+        { name: 'Ally' },
+        { name: 'NerdWallet' },
+      ],
+      ourAssets: 1,
+      source: {
+        publisher: 'Fortune',
+        url: 'https://fortune.com/article/best-savings-account-rates-6-29-2026/',
+        date: '2026-06',
+      },
+    },
+  },
+  {
+    id: 'topic_delinquency_payoff',
+    title: 'Card delinquencies hit a 15-year high: a realistic payoff plan at 21% APR',
+    rationale:
+      'Q1 2026 balances hit ~$1.25T with 90+ day delinquencies near 13% (highest since ~2011) and average APR at 21.5% — heavy demand for credible, non-salesy debt-payoff guidance.',
+    audienceSegment: 'Debt-Conscious Optimizers',
+    funnelStage: 'consideration',
+    format: 'explainer',
+    demand: 'High',
+    demandScore: 90,
+    difficulty: 'Medium',
+    complianceSensitivity: 'High',
+    onBrand: true,
+    tags: ['debt', 'apr', 'balance-transfer'],
+    origin: 'trending',
+    signals: {
+      demandSeries: [58, 63, 68, 77, 85, 91],
+      demandTrend: 'rising',
+      trendWindow: 'Apr–Jun 2026',
+      competitors: [
+        {
+          name: 'SoFi',
+          url: 'https://www.sofi.com/learn/content/how-to-pay-off-credit-card-debt/',
+        },
+        {
+          name: 'LendingTree',
+          url: 'https://www.lendingtree.com/credit-cards/study/credit-card-debt-statistics/',
+        },
+      ],
+      ourAssets: 2,
+      source: {
+        publisher: 'Wolf Street',
+        url: 'https://wolfstreet.com/2026/05/20/credit-card-delinquencies-balances-debt-to-income-credit-limits-and-collections-in-q1-2026-americans-and-their-revolving-credit/',
+        date: '2026-05',
+      },
+    },
+  },
+  {
+    id: 'topic_ai_scams',
+    title: 'AI scams are exploding in 2026: how to spot deepfake voice and “bank rep” fraud',
+    rationale:
+      'Consumer Reports and issuer alerts flag surging AI/deepfake scams (banks cite a ~1,210% jump in AI-enabled fraud) — directly reinforces the 24/7 monitoring + virtual card numbers proof points.',
+    audienceSegment: 'Security-Minded',
+    funnelStage: 'awareness',
+    format: 'blog',
+    demand: 'High',
+    demandScore: 86,
+    difficulty: 'Low',
+    complianceSensitivity: 'Low',
+    onBrand: true,
+    tags: ['security', 'fraud', 'trust'],
+    origin: 'trending',
+    signals: {
+      demandSeries: [40, 49, 61, 70, 82, 90],
+      demandTrend: 'rising',
+      trendWindow: 'Apr–Jun 2026',
+      competitors: [
+        { name: 'Chase' },
+        { name: 'Bank of America' },
+      ],
+      ourAssets: 1,
+      source: {
+        publisher: 'Consumer Reports',
+        url: 'https://www.clickondetroit.com/news/local/2026/04/10/consumer-reports-warns-of-rising-ai-scams-targeting-banks-irs-and-job-seekers/',
+        date: '2026-04',
+      },
+    },
+  },
+  {
+    id: 'topic_bnpl_fico',
+    title: 'Buy Now, Pay Later will now show up on your credit score: what to know',
+    rationale:
+      'New FICO models fold BNPL loan data into credit scores as lenders adopt them — a timely education hook for CreditWise and responsible credit-building.',
+    audienceSegment: 'Credit Builders',
+    funnelStage: 'awareness',
+    format: 'explainer',
+    demand: 'High',
+    demandScore: 84,
+    difficulty: 'Medium',
+    complianceSensitivity: 'Medium',
+    onBrand: true,
+    tags: ['credit-score', 'bnpl', 'education'],
+    origin: 'trending',
+    signals: {
+      demandSeries: [44, 55, 60, 68, 79, 86],
+      demandTrend: 'rising',
+      trendWindow: 'Apr–Jun 2026',
+      competitors: [
+        {
+          name: 'Empower',
+          url: 'https://www.empower.com/the-currency/money/does-buy-now-pay-later-affect-credit-scores-news',
+        },
+        { name: 'Bank of Hawaii' },
+      ],
+      ourAssets: 0,
+      source: {
+        publisher: 'FICO',
+        url: 'https://www.fico.com/en/newsroom/fico-unveils-groundbreaking-credit-scores-incorporate-buy-now-pay-later-data',
+        date: '2026-05',
+      },
+    },
+  },
+  {
+    id: 'topic_auto_financing_2026',
+    title: 'New-car prices hit $51K and loans near 7%: smart auto financing moves for 2026',
+    rationale:
+      'Record ~$51K average new-car prices and ~7% loans create an affordability crunch — a strong, underserved fit for Auto Navigator pre-qualification.',
+    audienceSegment: 'Auto Buyers',
+    funnelStage: 'consideration',
+    format: 'blog',
+    demand: 'Medium',
+    demandScore: 75,
+    difficulty: 'Medium',
+    complianceSensitivity: 'High',
+    onBrand: true,
+    tags: ['auto', 'apr', 'financing'],
+    origin: 'competitor-gap',
+    signals: {
+      demandSeries: [52, 55, 61, 64, 70, 74],
+      demandTrend: 'rising',
+      trendWindow: 'Apr–Jun 2026',
+      competitors: [
+        {
+          name: 'Bank of America',
+          url: 'https://www.bankofamerica.com/auto-loans/',
+        },
+        {
+          name: 'Bankrate',
+          url: 'https://www.bankrate.com/loans/auto-loans/auto-loan-rate-forecast/',
+        },
+      ],
+      ourAssets: 0,
+      source: {
+        publisher: 'Bankrate',
+        url: 'https://www.bankrate.com/loans/auto-loans/auto-loan-rate-forecast/',
+        date: '2026-06',
+      },
+    },
+  },
+  {
+    id: 'topic_tariffs_budget',
+    title: 'Tariffs are adding ~$600 to household budgets: where prices rise and how to adjust',
+    rationale:
+      'Tariff-inflation household-budget content is in heavy rotation — a broad awareness hook for everyday cash-back + budgeting tools.',
+    audienceSegment: 'Budgeting Families',
+    funnelStage: 'awareness',
+    format: 'blog',
+    demand: 'Medium',
+    demandScore: 72,
+    difficulty: 'Low',
+    complianceSensitivity: 'Low',
+    onBrand: true,
+    tags: ['budgeting', 'inflation', 'seasonal'],
+    origin: 'trending',
+    signals: {
+      demandSeries: [50, 58, 66, 62, 70, 73],
+      demandTrend: 'rising',
+      trendWindow: 'Apr–Jun 2026',
+      competitors: [
+        { name: 'Bankrate' },
+        { name: 'CNBC', url: 'https://www.cnbc.com/2026/03/23/household-tariff-costs.html' },
+      ],
+      ourAssets: 1,
+      source: {
+        publisher: 'WTOP News',
+        url: 'https://wtop.com/news/2026/05/how-tariffs-are-still-impacting-your-household-budget-in-2026/',
+        date: '2026-05',
+      },
+    },
+  },
+  {
+    id: 'topic_latefee_cfpb',
+    title: 'The $8 late-fee cap is dead: what the vacated CFPB rule means for your card',
+    rationale:
+      'The CFPB late-fee rule was vacated but most issuers kept ~$8 fees — persistent consumer confusion, and a chance to lead on fee transparency + autopay.',
+    audienceSegment: 'Value Seekers',
+    funnelStage: 'awareness',
+    format: 'explainer',
+    demand: 'Medium',
+    demandScore: 70,
+    difficulty: 'Medium',
+    complianceSensitivity: 'High',
+    onBrand: true,
+    tags: ['fees', 'apr', 'regulation'],
+    origin: 'trending',
+    signals: {
+      demandSeries: [66, 63, 68, 64, 67, 69],
+      demandTrend: 'steady',
+      trendWindow: 'Apr–Jun 2026',
+      competitors: [
+        { name: 'CNBC', url: 'https://www.cnbc.com/select/credit-card-late-fees-new-cap/' },
+        { name: 'Firstcard' },
+      ],
+      ourAssets: 1,
+      source: {
+        publisher: 'Consumer Financial Services Law Monitor',
+        url: 'https://www.consumerfinancialserviceslawmonitor.com/2025/04/cfpb-abandons-credit-card-late-fee-rule/',
+        date: '2025-04',
+      },
+    },
+  },
+
+  // ── Evergreen / seasonal editorial staples ─────────────────────────────────
   {
     id: 'topic_bt_guide',
     title: 'Balance transfer 101: how to move debt the smart way',
@@ -18,6 +262,7 @@ export const SEED_TOPIC_BACKLOG: TopicOpportunity[] = [
     complianceSensitivity: 'High',
     onBrand: true,
     tags: ['balance-transfer', 'apr', 'debt'],
+    origin: 'evergreen',
   },
   {
     id: 'topic_creditwise_explainer',
@@ -32,11 +277,13 @@ export const SEED_TOPIC_BACKLOG: TopicOpportunity[] = [
     complianceSensitivity: 'Medium',
     onBrand: true,
     tags: ['credit-score', 'education'],
+    origin: 'evergreen',
   },
   {
     id: 'topic_travel_rewards',
     title: 'How to maximize travel rewards for summer trips',
-    rationale: 'Seasonal travel peak; aligns with Venture proof points.',
+    rationale:
+      'Seasonal travel peak; Amex/Delta and Chase perk refreshes are driving points-optimization searches — aligns with Venture proof points.',
     audienceSegment: 'Aspirational Travelers',
     funnelStage: 'consideration',
     format: 'blog',
@@ -46,6 +293,25 @@ export const SEED_TOPIC_BACKLOG: TopicOpportunity[] = [
     complianceSensitivity: 'Medium',
     onBrand: true,
     tags: ['rewards', 'travel'],
+    origin: 'trending',
+    signals: {
+      demandSeries: [55, 60, 68, 74, 80, 85],
+      demandTrend: 'rising',
+      trendWindow: 'May–Jun 2026',
+      competitors: [
+        {
+          name: 'American Express',
+          url: 'https://upgradedpoints.com/news/favorite-credit-card-trend-2026/',
+        },
+        { name: 'Chase' },
+      ],
+      ourAssets: 3,
+      source: {
+        publisher: 'Upgraded Points',
+        url: 'https://upgradedpoints.com/news/favorite-credit-card-trend-2026/',
+        date: '2026-06',
+      },
+    },
   },
   {
     id: 'topic_no_fee_explainer',
@@ -60,6 +326,7 @@ export const SEED_TOPIC_BACKLOG: TopicOpportunity[] = [
     complianceSensitivity: 'Low',
     onBrand: true,
     tags: ['fees', 'savings'],
+    origin: 'evergreen',
   },
   {
     id: 'topic_back_to_school',
@@ -74,6 +341,7 @@ export const SEED_TOPIC_BACKLOG: TopicOpportunity[] = [
     complianceSensitivity: 'Low',
     onBrand: true,
     tags: ['seasonal', 'rewards'],
+    origin: 'seasonal',
   },
   {
     id: 'topic_first_card',
@@ -88,6 +356,7 @@ export const SEED_TOPIC_BACKLOG: TopicOpportunity[] = [
     complianceSensitivity: 'Medium',
     onBrand: true,
     tags: ['credit-score', 'education'],
+    origin: 'evergreen',
   },
   {
     id: 'topic_savings_rate',
@@ -102,6 +371,7 @@ export const SEED_TOPIC_BACKLOG: TopicOpportunity[] = [
     complianceSensitivity: 'Medium',
     onBrand: true,
     tags: ['savings', 'apr'],
+    origin: 'evergreen',
   },
   {
     id: 'topic_holiday_spend',
@@ -116,6 +386,7 @@ export const SEED_TOPIC_BACKLOG: TopicOpportunity[] = [
     complianceSensitivity: 'Low',
     onBrand: true,
     tags: ['seasonal', 'budgeting'],
+    origin: 'seasonal',
   },
   {
     id: 'topic_tax_season',
@@ -130,6 +401,7 @@ export const SEED_TOPIC_BACKLOG: TopicOpportunity[] = [
     complianceSensitivity: 'Low',
     onBrand: true,
     tags: ['seasonal', 'education'],
+    origin: 'seasonal',
   },
   {
     id: 'topic_apr_explainer',
@@ -144,6 +416,7 @@ export const SEED_TOPIC_BACKLOG: TopicOpportunity[] = [
     complianceSensitivity: 'High',
     onBrand: true,
     tags: ['apr', 'education'],
+    origin: 'evergreen',
   },
   {
     id: 'topic_fraud_protection',
@@ -158,6 +431,7 @@ export const SEED_TOPIC_BACKLOG: TopicOpportunity[] = [
     complianceSensitivity: 'Low',
     onBrand: true,
     tags: ['security', 'trust'],
+    origin: 'evergreen',
   },
   {
     id: 'topic_small_business',
@@ -172,6 +446,7 @@ export const SEED_TOPIC_BACKLOG: TopicOpportunity[] = [
     complianceSensitivity: 'Medium',
     onBrand: true,
     tags: ['business', 'education'],
+    origin: 'competitor-gap',
   },
   {
     id: 'topic_debt_payoff',
@@ -186,11 +461,13 @@ export const SEED_TOPIC_BACKLOG: TopicOpportunity[] = [
     complianceSensitivity: 'Medium',
     onBrand: true,
     tags: ['debt', 'budgeting'],
+    origin: 'evergreen',
   },
   {
     id: 'topic_crypto_offbrand',
     title: 'Should you buy crypto with a credit card?',
-    rationale: 'Trending search interest, but conflicts with the brand’s responsible-credit positioning and carries elevated risk.',
+    rationale:
+      'Trending search interest, but conflicts with the brand’s responsible-credit positioning and carries elevated risk.',
     audienceSegment: 'Trend Chasers',
     funnelStage: 'awareness',
     format: 'blog',
@@ -202,5 +479,23 @@ export const SEED_TOPIC_BACKLOG: TopicOpportunity[] = [
     offBrandReason:
       'Encouraging credit-funded crypto speculation conflicts with the brand’s responsible-credit, "you’re in control" positioning and raises UDAAP/suitability concerns.',
     tags: ['crypto', 'risk'],
+    origin: 'trending',
+    signals: {
+      demandSeries: [60, 68, 72, 78, 80, 83],
+      demandTrend: 'rising',
+      trendWindow: 'Apr–Jun 2026',
+      competitors: [
+        {
+          name: 'SoFi',
+          url: 'https://www.sofi.com/press/sofi-bank-becomes-the-first-and-only-nationally-chartered-bank-to-launch-crypto-trading-for-consumers/',
+        },
+      ],
+      ourAssets: 0,
+      source: {
+        publisher: 'SoFi',
+        url: 'https://www.sofi.com/press/sofi-bank-becomes-the-first-and-only-nationally-chartered-bank-to-launch-crypto-trading-for-consumers/',
+        date: '2026-04',
+      },
+    },
   },
 ]

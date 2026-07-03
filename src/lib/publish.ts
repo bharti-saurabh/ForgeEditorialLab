@@ -55,6 +55,14 @@ export const CHANNELS: ChannelMeta[] = [
       'Tight, high-contrast hook + single CTA. Material terms must still be present or clearly linked.',
     allowsLinkedDisclosure: true,
   },
+  {
+    key: 'sem',
+    label: 'SEM / Search ad',
+    charLimit: 300,
+    guidance:
+      'Responsive search ad: 3 headlines (≤30 char) and 2 descriptions (≤90 char). Keep material terms clear or linked ("see terms").',
+    allowsLinkedDisclosure: true,
+  },
 ]
 
 export function channelMeta(key: ChannelKey): ChannelMeta {

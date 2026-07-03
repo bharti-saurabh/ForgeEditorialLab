@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useAppStore } from '@/store/useAppStore'
 import { Card, CardBody, CardHeader } from '@/components/Card'
 import { Button } from '@/components/Button'
@@ -9,9 +9,11 @@ import { ScoreGauge } from '@/components/ScoreGauge'
 import { ExportButton } from '@/components/ExportButton'
 import { Disclaimer } from '@/components/Disclaimer'
 import { Markdown } from '@/components/Markdown'
-import { SEED_TOPIC_BACKLOG } from '@/seed/topicBacklog'
+import { findTopic } from '@/lib/topics'
+import { PRIMARY_CHANNELS, channelSpec } from '@/lib/channels'
 import { SEED_RULEBOOK } from '@/seed/rulebook'
 import { disclosuresForTopic, rulesForTopic } from '@/lib/compliance'
+import { draftComplianceSummary, type DraftComplianceSummary } from '@/lib/draftCompliance'
 import {
   BRIEF_SYSTEM,
   buildBriefPrompt,
@@ -20,13 +22,19 @@ import {
   buildDraftPrompt,
   demoDraft,
   voiceDirectives,
+  REFINE_SYSTEM,
+  REFINE_META,
+  buildRefinePrompt,
+  demoRefine,
+  type RefineAction,
 } from '@/lib/prompts/draft'
 import { runChat } from '@/lib/router/router'
 import { brandMatchScore } from '@/lib/brand/grounding'
 import { friendlyModel } from '@/lib/router/roles'
+import { estimateCostUsd, fmtUsd } from '@/lib/router/pricing'
 import { parseJsonLoose } from '@/lib/json'
 import { uid, fmtMs, fmtDateTime } from '@/lib/format'
-import type { ContentBrief, DraftVariant, VoiceControls } from '@/types'
+import type { BriefInput, ContentBrief, DraftVariant, VoiceControls } from '@/types'
 import {
   IconDoc,
   IconBolt,
@@ -36,6 +44,8 @@ import {
   IconTrash,
   IconCheck,
   IconRoute,
+  IconGear,
+  IconAlert,
 } from '@/components/icons'
 import { cn } from '@/lib/cn'
 
@@ -47,15 +57,19 @@ export function BriefDraftView() {
   const profile = useAppStore((s) => s.brandProfile)
   const settings = useAppStore((s) => s.settings)
   const pipeline = useAppStore((s) => s.pipeline)
+  const updateBriefInput = useAppStore((s) => s.updateBriefInput)
+  const setPrimaryChannel = useAppStore((s) => s.setPrimaryChannel)
   const setBrief = useAppStore((s) => s.setBrief)
+  const updateBrief = useAppStore((s) => s.updateBrief)
   const updateVoice = useAppStore((s) => s.updateVoice)
   const addDraft = useAppStore((s) => s.addDraft)
+  const updateDraft = useAppStore((s) => s.updateDraft)
   const removeDraft = useAppStore((s) => s.removeDraft)
   const chooseDraft = useAppStore((s) => s.chooseDraft)
 
   const topic = useMemo(
-    () => SEED_TOPIC_BACKLOG.find((t) => t.id === pipeline.selectedTopicId) ?? null,
-    [pipeline.selectedTopicId],
+    () => findTopic(pipeline.selectedTopicId, pipeline.userTopics),
+    [pipeline.selectedTopicId, pipeline.userTopics],
   )
 
   const disclosures = useMemo(
@@ -67,11 +81,41 @@ export function BriefDraftView() {
     [topic],
   )
 
+  // Per-draft compliance PREVIEW for the bake-off (reuses the Step 4 engine).
+  const draftSummaries = useMemo(() => {
+    const m = new Map<string, DraftComplianceSummary>()
+    if (!topic) return m
+    for (const d of pipeline.drafts)
+      m.set(d.id, draftComplianceSummary(d, topic, profile, SEED_RULEBOOK))
+    return m
+  }, [pipeline.drafts, topic, profile])
+
+  // The variant closest to clearing the gate (cleared → most disclosures → fewest severe issues).
+  const safestDraftId = useMemo(() => {
+    if (pipeline.drafts.length < 2) return null
+    let best: string | null = null
+    let bestKey = -Infinity
+    for (const d of pipeline.drafts) {
+      const s = draftSummaries.get(d.id)
+      if (!s) continue
+      const key =
+        (s.cleared ? 1000 : 0) + s.disclosuresPresent * 10 - (s.critical * 5 + s.major * 2)
+      if (key > bestKey) {
+        bestKey = key
+        best = d.id
+      }
+    }
+    return best
+  }, [pipeline.drafts, draftSummaries])
+
   const [briefRunning, setBriefRunning] = useState(false)
+  const [briefEditing, setBriefEditing] = useState(false)
+  const [showInputs, setShowInputs] = useState(false)
   const [draftModel, setDraftModel] = useState(settings.models.text)
   const [draftRunningModel, setDraftRunningModel] = useState<string | null>(null)
 
-  const { brief, voice, drafts, chosenDraftId } = pipeline
+  const { brief, briefInput, voice, drafts, chosenDraftId, primaryChannel } = pipeline
+  const channel = channelSpec(primaryChannel)
   const topScore = drafts.length
     ? Math.max(...drafts.map((d) => d.brandMatch.score))
     : 0
@@ -105,12 +149,12 @@ export function BriefDraftView() {
         role: 'strategy',
         step: 'Step 2 · Content Brief',
         system: BRIEF_SYSTEM,
-        user: buildBriefPrompt(profile, topic, disclosures),
+        user: buildBriefPrompt(profile, topic, disclosures, briefInput, channel),
         reason: 'Reasoning model — converts one topic into a structured, executable brief.',
         maxTokens: 700,
-        demo: () => JSON.stringify(demoBrief(profile, topic)),
+        demo: () => JSON.stringify(demoBrief(profile, topic, briefInput, channel)),
       })
-      const parsed = parseJsonLoose<Partial<ContentBrief>>(text) ?? demoBrief(profile, topic)
+      const parsed = parseJsonLoose<Partial<ContentBrief>>(text) ?? demoBrief(profile, topic, briefInput, channel)
       const next: ContentBrief = {
         objective: parsed.objective ?? '',
         audience: parsed.audience ?? '',
@@ -141,11 +185,11 @@ export function BriefDraftView() {
         role: 'copy',
         step: `Step 2 · Draft (${friendlyModel(modelId)})`,
         system: DRAFT_SYSTEM,
-        user: buildDraftPrompt(profile, brief, voice),
+        user: buildDraftPrompt(profile, brief, voice, channel),
         modelId,
         reason: 'Brand-voice copywriter — drafts on-brand copy following the learned voice profile.',
         maxTokens: 1200,
-        demo: () => demoDraft(profile, brief, topic, voice, modelId),
+        demo: () => demoDraft(profile, brief, topic, voice, modelId, channel),
       })
       const { title, body } = parseDraft(text)
       const brandMatch = brandMatchScore(`${title}\n${body}`, profile)
@@ -159,6 +203,7 @@ export function BriefDraftView() {
         brandMatch,
         wordCount: body.split(/\s+/).filter(Boolean).length,
         latencyMs: entry.latencyMs,
+        usage: entry.usage,
         generatedAt: entry.ts,
       }
       addDraft(variant)
@@ -171,7 +216,37 @@ export function BriefDraftView() {
   }
 
   const chosen = drafts.find((d) => d.id === chosenDraftId) ?? null
+  const chosenSummary = chosen ? draftSummaries.get(chosen.id) ?? null : null
   const exportMd = brief ? buildExportMarkdown(topic.title, brief, chosen) : undefined
+
+  /** Re-score a hand-edited / refined variant and persist it. */
+  function commitDraftEdit(id: string, title: string, body: string) {
+    const brandMatch = brandMatchScore(`${title}\n${body}`, profile)
+    const wordCount = body.split(/\s+/).filter(Boolean).length
+    updateDraft(id, { title, body, brandMatch, wordCount, edited: true })
+  }
+
+  /** Run one AI-assist refinement on a passage; returns the revised markdown. */
+  async function runRefine(
+    action: RefineAction,
+    text: string,
+    missingDisclosures: string[],
+  ): Promise<string> {
+    const { text: out, mode, entry } = await runChat({
+      role: 'copy',
+      step: `Step 2 · Refine (${REFINE_META[action].label})`,
+      system: REFINE_SYSTEM,
+      user: buildRefinePrompt({ action, profile, voice, text, missingDisclosures }),
+      reason: `Brand-voice copywriter — ${REFINE_META[action].label.toLowerCase()} the copy while preserving placeholders.`,
+      maxTokens: 1200,
+      demo: () => demoRefine(action, text, missingDisclosures),
+    })
+    pushToast(
+      mode === 'live' ? 'success' : 'info',
+      `${REFINE_META[action].label} applied${mode === 'live' ? ` in ${fmtMs(entry.latencyMs)}` : ' (demo)'}.`,
+    )
+    return out.trim()
+  }
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -232,6 +307,61 @@ export function BriefDraftView() {
         </CardBody>
       </Card>
 
+      {/* primary channel — the surface this piece is authored for (drives the
+          brief, draft, visuals, posted preview, and compliance review) */}
+      <Card className="mb-5">
+        <CardHeader
+          icon={<IconRoute size={18} />}
+          title="Publish channel"
+          subtitle="Choose the surface this piece is built for — it shapes the brief, the draft, and the visuals downstream."
+        />
+        <CardBody>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {PRIMARY_CHANNELS.map((key) => {
+              const spec = channelSpec(key)
+              const active = key === primaryChannel
+              return (
+                <button
+                  key={key}
+                  onClick={() => setPrimaryChannel(key)}
+                  aria-pressed={active}
+                  className={cn(
+                    'rounded-xl border p-3 text-left transition',
+                    active
+                      ? 'border-straive-500 bg-straive-50/70 ring-2 ring-straive-500/20'
+                      : 'border-ink-200 bg-white hover:border-ink-300 hover:bg-ink-50/60',
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-1">
+                    <span className={cn('text-sm font-semibold', active ? 'text-straive-700' : 'text-ink-800')}>
+                      {spec.label}
+                    </span>
+                    {active && <IconCheck size={14} className="shrink-0 text-straive-600" />}
+                  </div>
+                  <p className="mt-1 text-[11px] leading-snug text-ink-500">{spec.blurb}</p>
+                </button>
+              )
+            })}
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-ink-500">
+            <span>
+              <span className="font-medium text-ink-600">Length:</span> {channel.lengthTarget}
+            </span>
+            <span>
+              <span className="font-medium text-ink-600">Visuals:</span>{' '}
+              {channel.kind === 'text-ad'
+                ? 'text-only (search ad)'
+                : channel.ratios.map((r) => r.ratio).join(' · ')}
+            </span>
+          </div>
+          {(brief || drafts.length > 0) && (
+            <p className="mt-2 text-[11px] text-warn">
+              Switched channel? Regenerate the brief and drafts so they match this surface.
+            </p>
+          )}
+        </CardBody>
+      </Card>
+
       <Disclaimer kind="legal" className="mb-5" />
 
       {/* brief */}
@@ -241,25 +371,48 @@ export function BriefDraftView() {
           title="Content brief"
           subtitle="Objective, angle, structure, and the disclosures the copy must carry."
           actions={
-            <Button
-              variant={brief ? 'secondary' : 'primary'}
-              size="sm"
-              loading={briefRunning}
-              icon={!briefRunning ? <IconBolt size={15} /> : undefined}
-              onClick={generateBrief}
-            >
-              {brief ? 'Regenerate' : 'Generate brief'}
-            </Button>
+            <div className="flex items-center gap-2">
+              {brief && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={briefEditing ? <IconCheck size={15} /> : <IconGear size={15} />}
+                  onClick={() => setBriefEditing((v) => !v)}
+                >
+                  {briefEditing ? 'Done' : 'Edit'}
+                </Button>
+              )}
+              <Button
+                variant={brief ? 'secondary' : 'primary'}
+                size="sm"
+                loading={briefRunning}
+                icon={!briefRunning ? <IconBolt size={15} /> : undefined}
+                onClick={generateBrief}
+              >
+                {brief ? 'Regenerate' : 'Generate brief'}
+              </Button>
+            </div>
           }
         />
-        <CardBody>
+        <CardBody className="space-y-4">
+          <BriefInputsPanel
+            input={briefInput}
+            onChange={updateBriefInput}
+            open={showInputs || !brief}
+            canToggle={!!brief}
+            onToggle={() => setShowInputs((v) => !v)}
+          />
           {brief ? (
-            <BriefBody brief={brief} watchRules={watchRules} />
+            briefEditing ? (
+              <BriefEditor brief={brief} onChange={updateBrief} />
+            ) : (
+              <BriefBody brief={brief} watchRules={watchRules} />
+            )
           ) : (
             <EmptyState
               icon={<IconDoc size={20} />}
               title="No brief yet"
-              description="Generate a brief to define the objective, angle, structure, and mandatory disclosures before drafting."
+              description="Add any direction above (optional), then generate a brief to define the objective, angle, structure, and mandatory disclosures before drafting."
             />
           )}
         </CardBody>
@@ -354,8 +507,10 @@ export function BriefDraftView() {
                 <DraftCard
                   key={d.id}
                   draft={d}
+                  summary={draftSummaries.get(d.id)}
                   chosen={d.id === chosenDraftId}
                   isTop={drafts.length > 1 && d.brandMatch.score === topScore}
+                  isSafest={drafts.length > 1 && d.id === safestDraftId}
                   onChoose={() => chooseDraft(d.id)}
                   onRemove={() => removeDraft(d.id)}
                 />
@@ -364,6 +519,32 @@ export function BriefDraftView() {
           )}
         </CardBody>
       </Card>
+
+      {/* finalize the chosen draft — manual edit + AI-assist */}
+      {chosen && (
+        <Card className="mt-5">
+          <CardHeader
+            icon={<IconSparkles size={18} />}
+            title="Finalize the chosen draft"
+            subtitle="Edit directly, or use an AI assist. Select text first to target a passage; otherwise the whole draft is refined."
+            actions={
+              <div className="flex items-center gap-2">
+                {chosen.edited && <Badge tone="accent">Edited</Badge>}
+                <ModelTag role="copy" modelLabel={chosen.modelLabel} mode={chosen.mode} />
+              </div>
+            }
+          />
+          <CardBody>
+            <DraftEditor
+              key={chosen.id}
+              draft={chosen}
+              summary={chosenSummary}
+              onCommit={(title, body) => commitDraftEdit(chosen.id, title, body)}
+              runRefine={runRefine}
+            />
+          </CardBody>
+        </Card>
+      )}
     </div>
   )
 }
@@ -585,17 +766,22 @@ function Dial({
 
 function DraftCard({
   draft,
+  summary,
   chosen,
   isTop,
+  isSafest,
   onChoose,
   onRemove,
 }: {
   draft: DraftVariant
+  summary?: DraftComplianceSummary
   chosen: boolean
   isTop: boolean
+  isSafest: boolean
   onChoose: () => void
   onRemove: () => void
 }) {
+  const cost = draft.usage ? estimateCostUsd(draft.modelId, 'copy', draft.usage) : undefined
   return (
     <div
       className={cn(
@@ -607,6 +793,8 @@ function DraftCard({
         <div className="flex flex-wrap items-center gap-2">
           <ModelTag role="copy" modelLabel={draft.modelLabel} mode={draft.mode} />
           {isTop && <Badge tone="ok">Top brand-match</Badge>}
+          {isSafest && <Badge tone="info">Closest to compliant</Badge>}
+          {draft.edited && <Badge tone="accent">Edited</Badge>}
           {chosen && <Badge tone="accent">Chosen</Badge>}
         </div>
         <button
@@ -624,9 +812,14 @@ function DraftCard({
           <Metric label="Brand-match" value={`${draft.brandMatch.score}/100`} />
           <Metric label="Words" value={draft.wordCount} />
           <Metric label="Latency" value={fmtMs(draft.latencyMs)} />
-          <Metric label="On-voice hits" value={draft.brandMatch.hit.length} />
+          <Metric
+            label="Cost (est.)"
+            value={cost !== undefined ? fmtUsd(cost) : '—'}
+          />
         </div>
       </div>
+
+      {summary && <ComplianceStrip summary={summary} />}
 
       {(draft.brandMatch.hit.length > 0 || draft.brandMatch.missed.length > 0) && (
         <div className="flex flex-wrap gap-1.5 border-b border-ink-100 px-4 py-2">
@@ -667,6 +860,263 @@ function Metric({ label, value }: { label: string; value: React.ReactNode }) {
     <div>
       <div className="text-[10px] uppercase tracking-wide text-ink-400">{label}</div>
       <div className="font-semibold tabular-nums text-ink-800">{value}</div>
+    </div>
+  )
+}
+
+// ── Compliance preview strip (bake-off) ────────────────────────────────────
+
+function ComplianceStrip({ summary: s }: { summary: DraftComplianceSummary }) {
+  const clean = s.disclosuresPresent === s.disclosuresTotal
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-ink-100 px-4 py-2 text-[11px]">
+      <span className="inline-flex items-center gap-1 font-semibold text-ink-500">
+        <IconShield size={12} /> Compliance
+      </span>
+      <span
+        className={cn('inline-flex items-center gap-1 font-medium', clean ? 'text-ok' : 'text-warn')}
+      >
+        Disclosures {s.disclosuresPresent}/{s.disclosuresTotal}
+      </span>
+      {s.critical > 0 && (
+        <span className="rounded bg-crit/10 px-1.5 py-0.5 font-semibold text-crit">
+          {s.critical} critical
+        </span>
+      )}
+      {s.major > 0 && (
+        <span className="rounded bg-warn/10 px-1.5 py-0.5 font-semibold text-warn">
+          {s.major} major
+        </span>
+      )}
+      {s.minor > 0 && (
+        <span className="rounded bg-ink-100 px-1.5 py-0.5 font-medium text-ink-500">
+          {s.minor} minor
+        </span>
+      )}
+      {s.cleared ? (
+        <span className="inline-flex items-center gap-1 font-semibold text-ok">
+          <IconCheck size={12} /> Likely clears gate
+        </span>
+      ) : (
+        <span className="text-ink-400">Step 4 gate will confirm</span>
+      )}
+    </div>
+  )
+}
+
+// ── Brief inputs (steering) ────────────────────────────────────────────────
+
+function BriefInputsPanel({
+  input,
+  onChange,
+  open,
+  canToggle,
+  onToggle,
+}: {
+  input: BriefInput
+  onChange: (patch: Partial<BriefInput>) => void
+  open: boolean
+  canToggle: boolean
+  onToggle: () => void
+}) {
+  const inputCls =
+    'h-9 w-full rounded-lg border border-ink-200 bg-white px-3 text-sm text-ink-800 placeholder:text-ink-400 focus:border-straive-400 focus:outline-none focus:ring-2 focus:ring-straive-500/20'
+  return (
+    <div className="rounded-xl border border-ink-200 bg-ink-50/50">
+      <button
+        onClick={canToggle ? onToggle : undefined}
+        className={cn(
+          'flex w-full items-center justify-between px-3.5 py-2.5 text-left',
+          !canToggle && 'cursor-default',
+        )}
+      >
+        <span className="text-xs font-semibold uppercase tracking-wide text-ink-500">
+          Brief inputs <span className="font-normal normal-case text-ink-400">· optional direction</span>
+        </span>
+        {canToggle && (
+          <IconChevron
+            size={14}
+            className={cn('text-ink-400 transition', open ? 'rotate-90' : '')}
+          />
+        )}
+      </button>
+      {open && (
+        <div className="space-y-2.5 border-t border-ink-200 px-3.5 py-3">
+          <input
+            className={inputCls}
+            placeholder="Working title (optional)"
+            value={input.workingTitle}
+            onChange={(e) => onChange({ workingTitle: e.target.value })}
+          />
+          <input
+            className={inputCls}
+            placeholder="Preferred angle / hook (optional)"
+            value={input.anglePreference}
+            onChange={(e) => onChange({ anglePreference: e.target.value })}
+          />
+          <textarea
+            className={cn(inputCls, 'h-auto py-2 leading-relaxed')}
+            rows={3}
+            placeholder="Must include — one point per line (optional)"
+            value={input.mustInclude}
+            onChange={(e) => onChange({ mustInclude: e.target.value })}
+          />
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Editable brief ─────────────────────────────────────────────────────────
+
+function BriefEditor({
+  brief,
+  onChange,
+}: {
+  brief: ContentBrief
+  onChange: (patch: Partial<ContentBrief>) => void
+}) {
+  const areaCls =
+    'w-full rounded-lg border border-ink-200 bg-white px-3 py-2 text-sm text-ink-800 focus:border-straive-400 focus:outline-none focus:ring-2 focus:ring-straive-500/20'
+  const toLines = (s: string) => s.split('\n').map((x) => x.trim()).filter(Boolean)
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-4 md:grid-cols-2">
+        <EditField label="Objective">
+          <textarea rows={2} className={areaCls} value={brief.objective} onChange={(e) => onChange({ objective: e.target.value })} />
+        </EditField>
+        <EditField label="Audience">
+          <textarea rows={2} className={areaCls} value={brief.audience} onChange={(e) => onChange({ audience: e.target.value })} />
+        </EditField>
+      </div>
+      <EditField label="Angle">
+        <textarea rows={2} className={areaCls} value={brief.angle} onChange={(e) => onChange({ angle: e.target.value })} />
+      </EditField>
+      <EditField label="Key messages (one per line)">
+        <textarea rows={4} className={areaCls} value={brief.keyMessages.join('\n')} onChange={(e) => onChange({ keyMessages: toLines(e.target.value) })} />
+      </EditField>
+      <div className="grid gap-4 md:grid-cols-2">
+        <EditField label="Outline (one per line)">
+          <textarea rows={5} className={areaCls} value={brief.structure.join('\n')} onChange={(e) => onChange({ structure: toLines(e.target.value) })} />
+        </EditField>
+        <div className="space-y-4">
+          <EditField label="SEO keywords (comma-separated)">
+            <input
+              className={areaCls}
+              value={brief.seoKeywords.join(', ')}
+              onChange={(e) => onChange({ seoKeywords: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })}
+            />
+          </EditField>
+          <EditField label="Tone notes">
+            <textarea rows={3} className={areaCls} value={brief.toneNotes} onChange={(e) => onChange({ toneNotes: e.target.value })} />
+          </EditField>
+        </div>
+      </div>
+      <div className="rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2 text-xs text-amber-900">
+        <span className="font-semibold">Mandatory disclosures are locked</span> — derived from the
+        topic + rulebook and enforced by the Step 4 gate ({brief.mandatoryDisclosures.length}{' '}
+        required).
+      </div>
+    </div>
+  )
+}
+
+function EditField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <FieldLabel>{label}</FieldLabel>
+      <div className="mt-1">{children}</div>
+    </div>
+  )
+}
+
+// ── Chosen-draft editor + AI-assist ────────────────────────────────────────
+
+function DraftEditor({
+  draft,
+  summary,
+  onCommit,
+  runRefine,
+}: {
+  draft: DraftVariant
+  summary: DraftComplianceSummary | null
+  onCommit: (title: string, body: string) => void
+  runRefine: (action: RefineAction, text: string, missing: string[]) => Promise<string>
+}) {
+  const [title, setTitle] = useState(draft.title)
+  const [body, setBody] = useState(draft.body)
+  const [busy, setBusy] = useState<RefineAction | null>(null)
+  const taRef = useRef<HTMLTextAreaElement>(null)
+
+  function commit(nextTitle: string, nextBody: string) {
+    setTitle(nextTitle)
+    setBody(nextBody)
+    onCommit(nextTitle, nextBody)
+  }
+
+  async function refine(action: RefineAction) {
+    const ta = taRef.current
+    const selStart = ta?.selectionStart ?? 0
+    const selEnd = ta?.selectionEnd ?? 0
+    const hasSel = action !== 'disclosures' && selEnd > selStart
+    const target = hasSel ? body.slice(selStart, selEnd) : body
+    const missing = summary?.missingDisclosures ?? []
+    setBusy(action)
+    try {
+      const out = await runRefine(action, target, missing)
+      const nextBody = hasSel ? body.slice(0, selStart) + out + body.slice(selEnd) : out
+      commit(title, nextBody)
+    } catch {
+      /* error toast is raised upstream */
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const fieldCls =
+    'w-full rounded-lg border border-ink-200 bg-white px-3 py-2 text-sm text-ink-800 focus:border-straive-400 focus:outline-none focus:ring-2 focus:ring-straive-500/20'
+  const actions: RefineAction[] = ['tighten', 'warm', 'disclosures', 'derisk', 'simplify']
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+          AI assist
+        </span>
+        {actions.map((a) => (
+          <Button
+            key={a}
+            variant="secondary"
+            size="sm"
+            loading={busy === a}
+            disabled={!!busy}
+            icon={busy !== a ? <IconSparkles size={14} /> : undefined}
+            onClick={() => refine(a)}
+          >
+            {REFINE_META[a].label}
+          </Button>
+        ))}
+      </div>
+      <input
+        className={cn(fieldCls, 'font-semibold')}
+        value={title}
+        onChange={(e) => commit(e.target.value, body)}
+        placeholder="Draft title"
+      />
+      <textarea
+        ref={taRef}
+        className={cn(fieldCls, 'font-mono text-[13px] leading-relaxed')}
+        rows={16}
+        value={body}
+        onChange={(e) => commit(title, e.target.value)}
+        spellCheck
+      />
+      <p className="flex items-start gap-1.5 text-xs text-ink-400">
+        <IconAlert size={13} className="mt-0.5 shrink-0" />
+        Edits re-score brand-match and the compliance preview live, and carry to Visuals.
+        Placeholders like [APR] are preserved — approved figures are added at the compliance gate.
+      </p>
     </div>
   )
 }

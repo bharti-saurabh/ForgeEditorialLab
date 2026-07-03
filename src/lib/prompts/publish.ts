@@ -118,6 +118,23 @@ export function demoAdaptation(
         cta,
         hashtags: topicHashtags(topic, profile.brandName),
       }
+    case 'sem': {
+      const clip = (s: string, n: number) => (s.length <= n ? s : s.slice(0, n - 1).trimEnd() + '…')
+      const subject = topic.title.split(':')[0].split(' (')[0]
+      return {
+        headline: clip(subject, 30),
+        body:
+          `Headlines:\n` +
+          `- ${clip(subject, 30)}\n` +
+          `- ${clip(`${profile.brandName} — No Surprises`, 30)}\n` +
+          `- ${clip('Transparent Rates & Fees', 30)}\n\n` +
+          `Descriptions:\n` +
+          `- ${clip(hook, 90)}\n` +
+          `- ${clip(`See how ${profile.brandName} keeps [APR], fees & terms clear. See terms.`, 90)}`,
+        cta,
+        hashtags: [],
+      }
+    }
     case 'paid-social':
     default:
       return {

@@ -8,7 +8,9 @@ import { ModelTag } from '@/components/ModelTag'
 import { ExportButton } from '@/components/ExportButton'
 import { Disclaimer } from '@/components/Disclaimer'
 import { Markdown } from '@/components/Markdown'
-import { SEED_TOPIC_BACKLOG } from '@/seed/topicBacklog'
+import { PostPreview } from '@/components/PostPreview'
+import { findTopic } from '@/lib/topics'
+import { channelSpec } from '@/lib/channels'
 import { SEED_RULEBOOK } from '@/seed/rulebook'
 import { disclosuresForTopic } from '@/lib/compliance'
 import { buildCleanVersion, currentScore } from '@/lib/complianceEngine'
@@ -44,8 +46,8 @@ export function PublishView() {
   const setPublish = useAppStore((s) => s.setPublish)
 
   const topic = useMemo(
-    () => SEED_TOPIC_BACKLOG.find((t) => t.id === pipeline.selectedTopicId) ?? null,
-    [pipeline.selectedTopicId],
+    () => findTopic(pipeline.selectedTopicId, pipeline.userTopics),
+    [pipeline.selectedTopicId, pipeline.userTopics],
   )
   const draft = pipeline.drafts.find((d) => d.id === pipeline.chosenDraftId) ?? null
   const compliance = pipeline.compliance
@@ -189,6 +191,13 @@ export function PublishView() {
   }
 
   const hero = pipeline.visuals.find((v) => v.id === pkg?.heroVisualId) ?? null
+  const primaryChannel = pipeline.primaryChannel
+  // Lead with the channel the piece was authored for; the rest are adaptations.
+  const orderedChannels = pkg
+    ? [...pkg.channels].sort(
+        (a, b) => Number(b.channel === primaryChannel) - Number(a.channel === primaryChannel),
+      )
+    : []
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -251,7 +260,7 @@ export function PublishView() {
             />
             <CardBody>
               <div className="grid gap-4 sm:grid-cols-[auto,1fr]">
-                {hero && (
+                {hero && hero.url && (
                   <img
                     src={hero.url}
                     alt={hero.altText || 'Hero visual'}
@@ -276,12 +285,30 @@ export function PublishView() {
             </CardBody>
           </Card>
 
-          {/* channel cards */}
+          {/* primary-channel posted preview — the piece as authored, reused from Steps 3-4 */}
+          <Card>
+            <CardHeader
+              icon={<IconPackage size={18} />}
+              title={`Primary channel · ${channelSpec(primaryChannel).label}`}
+              subtitle="The surface this piece was authored for, shown as it will appear once posted."
+            />
+            <CardBody>
+              <PostPreview
+                channel={primaryChannel}
+                profile={profile}
+                draft={draft}
+                visual={hero}
+              />
+            </CardBody>
+          </Card>
+
+          {/* channel cards — primary first */}
           <div className="space-y-4">
-            {pkg.channels.map((c) => (
+            {orderedChannels.map((c) => (
               <ChannelCard
                 key={c.channel}
                 adaptation={c}
+                isPrimary={c.channel === primaryChannel}
                 busy={busyChannel === c.channel}
                 disabled={!!busyChannel || running}
                 onRegenerate={() => regenerate(c.channel)}
@@ -296,11 +323,13 @@ export function PublishView() {
 
 function ChannelCard({
   adaptation: c,
+  isPrimary,
   busy,
   disabled,
   onRegenerate,
 }: {
   adaptation: ChannelAdaptation
+  isPrimary: boolean
   busy: boolean
   disabled: boolean
   onRegenerate: () => void
@@ -308,11 +337,12 @@ function ChannelCard({
   const pass = c.recheck.status === 'pass'
   const over = c.charCount > c.charLimit
   return (
-    <Card>
+    <Card className={cn(isPrimary && 'ring-2 ring-straive-500/30')}>
       <CardHeader
         title={
           <span className="flex items-center gap-2">
             {c.label}
+            {isPrimary && <Badge tone="navy">Primary</Badge>}
             <Badge tone={pass ? 'ok' : 'warn'} dot>
               {pass ? 'Re-check passed' : 'Re-check: review'}
             </Badge>

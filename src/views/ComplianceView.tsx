@@ -4,12 +4,14 @@ import { Card, CardBody, CardHeader } from '@/components/Card'
 import { Button } from '@/components/Button'
 import { Badge, severityTone } from '@/components/Badge'
 import { SectionTitle, EmptyState, Stat } from '@/components/EmptyState'
+import { ChannelChip } from '@/components/ChannelChip'
 import { ScoreGauge } from '@/components/ScoreGauge'
 import { ModelTag } from '@/components/ModelTag'
 import { ExportButton } from '@/components/ExportButton'
 import { Disclaimer } from '@/components/Disclaimer'
 import { Markdown } from '@/components/Markdown'
-import { SEED_TOPIC_BACKLOG } from '@/seed/topicBacklog'
+import { PostPreview } from '@/components/PostPreview'
+import { findTopic } from '@/lib/topics'
 import { SEED_RULEBOOK } from '@/seed/rulebook'
 import {
   analyzeContent,
@@ -58,8 +60,8 @@ export function ComplianceView() {
   const requestRevisions = useAppStore((s) => s.requestRevisions)
 
   const topic = useMemo(
-    () => SEED_TOPIC_BACKLOG.find((t) => t.id === pipeline.selectedTopicId) ?? null,
-    [pipeline.selectedTopicId],
+    () => findTopic(pipeline.selectedTopicId, pipeline.userTopics),
+    [pipeline.selectedTopicId, pipeline.userTopics],
   )
   const draft = pipeline.drafts.find((d) => d.id === pipeline.chosenDraftId) ?? null
   const compliance = pipeline.compliance
@@ -141,6 +143,7 @@ export function ComplianceView() {
         description="Rule-cited review of copy + visuals, with human sign-off and a full audit trail."
         actions={
           <div className="flex items-center gap-2">
+            <ChannelChip />
             {compliance?.signoff && compliance.signoff.decision !== 'rejected' && (
               <Button variant="primary" size="sm" icon={<IconChevron size={15} />} onClick={() => setView('step-5')}>
                 Continue to Publish
@@ -182,6 +185,24 @@ export function ComplianceView() {
       />
 
       <Disclaimer kind="legal" className="mb-5" />
+
+      {/* Review the piece as it will actually appear on its channel — net
+          impression is assessed on the rendered artifact, not loose copy. */}
+      <Card className="mb-5">
+        <CardHeader
+          icon={<IconEye size={18} />}
+          title="What you're signing off"
+          subtitle="The piece as it appears on its publish channel — review net impression here, not just the raw copy."
+        />
+        <CardBody>
+          <PostPreview
+            channel={pipeline.primaryChannel}
+            profile={profile}
+            draft={draft}
+            visual={pipeline.visuals.find((v) => v.role === 'hero') ?? pipeline.visuals[0] ?? null}
+          />
+        </CardBody>
+      </Card>
 
       {!compliance ? (
         <Card>
