@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { useAppStore } from '@/store/useAppStore'
 import { Card, CardBody, CardHeader } from '@/components/Card'
 import { Button } from '@/components/Button'
@@ -111,6 +111,8 @@ export function BriefDraftView() {
   const [briefRunning, setBriefRunning] = useState(false)
   const [briefEditing, setBriefEditing] = useState(false)
   const [showInputs, setShowInputs] = useState(false)
+  const [briefOpen, setBriefOpen] = useState(pipeline.drafts.length === 0)
+  const [voiceOpen, setVoiceOpen] = useState(false)
   const [draftModel, setDraftModel] = useState(settings.models.text)
   const [draftRunningModel, setDraftRunningModel] = useState<string | null>(null)
 
@@ -216,7 +218,6 @@ export function BriefDraftView() {
   }
 
   const chosen = drafts.find((d) => d.id === chosenDraftId) ?? null
-  const chosenSummary = chosen ? draftSummaries.get(chosen.id) ?? null : null
   const exportMd = brief ? buildExportMarkdown(topic.title, brief, chosen) : undefined
 
   /** Re-score a hand-edited / refined variant and persist it. */
@@ -225,6 +226,21 @@ export function BriefDraftView() {
     const wordCount = body.split(/\s+/).filter(Boolean).length
     updateDraft(id, { title, body, brandMatch, wordCount, edited: true })
   }
+
+  /** Live (unsaved) re-score + compliance preview of the editor buffer. */
+  const previewDraft = useCallback(
+    (title: string, body: string) => ({
+      brandMatch: brandMatchScore(`${title}\n${body}`, profile),
+      wordCount: body.split(/\s+/).filter(Boolean).length,
+      summary: draftComplianceSummary(
+        { title, body } as DraftVariant,
+        topic!,
+        profile,
+        SEED_RULEBOOK,
+      ),
+    }),
+    [profile, topic],
+  )
 
   /** Run one AI-assist refinement on a passage; returns the revised markdown. */
   async function runRefine(
@@ -249,7 +265,7 @@ export function BriefDraftView() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="mx-auto max-w-7xl">
       <SectionTitle
         title="Step 2 · Brief & Draft"
         description="Auto brief with mandatory disclosures, then an on-brand draft — with a live model bake-off."
@@ -307,16 +323,21 @@ export function BriefDraftView() {
         </CardBody>
       </Card>
 
+      <Disclaimer kind="legal" className="mb-5" />
+
+      {/* publish channel (narrow left) + content brief (wide right) — aligned
+          with the bake-off / finalize columns below */}
+      <div className="mb-5 grid items-start gap-5 lg:grid-cols-[minmax(320px,360px)_1fr]">
       {/* primary channel — the surface this piece is authored for (drives the
           brief, draft, visuals, posted preview, and compliance review) */}
-      <Card className="mb-5">
+      <Card>
         <CardHeader
           icon={<IconRoute size={18} />}
           title="Publish channel"
           subtitle="Choose the surface this piece is built for — it shapes the brief, the draft, and the visuals downstream."
         />
         <CardBody>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-2">
             {PRIMARY_CHANNELS.map((key) => {
               const spec = channelSpec(key)
               const active = key === primaryChannel
@@ -362,10 +383,8 @@ export function BriefDraftView() {
         </CardBody>
       </Card>
 
-      <Disclaimer kind="legal" className="mb-5" />
-
-      {/* brief */}
-      <Card className="mb-5">
+      {/* brief (collapsible setup) */}
+      <Card>
         <CardHeader
           icon={<IconDoc size={18} />}
           title="Content brief"
@@ -377,7 +396,10 @@ export function BriefDraftView() {
                   variant="ghost"
                   size="sm"
                   icon={briefEditing ? <IconCheck size={15} /> : <IconGear size={15} />}
-                  onClick={() => setBriefEditing((v) => !v)}
+                  onClick={() => {
+                    setBriefEditing((v) => !v)
+                    setBriefOpen(true)
+                  }}
                 >
                   {briefEditing ? 'Done' : 'Edit'}
                 </Button>
@@ -391,160 +413,207 @@ export function BriefDraftView() {
               >
                 {brief ? 'Regenerate' : 'Generate brief'}
               </Button>
+              {brief && (
+                <button
+                  onClick={() => setBriefOpen((v) => !v)}
+                  aria-label={briefOpen ? 'Collapse brief' : 'Expand brief'}
+                  className="rounded p-1 text-ink-400 transition hover:bg-ink-100 hover:text-ink-700"
+                >
+                  <IconChevron size={16} className={cn('transition-transform', briefOpen && 'rotate-180')} />
+                </button>
+              )}
             </div>
           }
         />
-        <CardBody className="space-y-4">
-          <BriefInputsPanel
-            input={briefInput}
-            onChange={updateBriefInput}
-            open={showInputs || !brief}
-            canToggle={!!brief}
-            onToggle={() => setShowInputs((v) => !v)}
-          />
-          {brief ? (
-            briefEditing ? (
-              <BriefEditor brief={brief} onChange={updateBrief} />
-            ) : (
-              <BriefBody brief={brief} watchRules={watchRules} />
-            )
-          ) : (
-            <EmptyState
-              icon={<IconDoc size={20} />}
-              title="No brief yet"
-              description="Add any direction above (optional), then generate a brief to define the objective, angle, structure, and mandatory disclosures before drafting."
+        {briefOpen ? (
+          <CardBody className="space-y-4">
+            <BriefInputsPanel
+              input={briefInput}
+              onChange={updateBriefInput}
+              open={showInputs || !brief}
+              canToggle={!!brief}
+              onToggle={() => setShowInputs((v) => !v)}
             />
-          )}
-        </CardBody>
-      </Card>
-
-      {/* voice controls */}
-      <Card className="mb-5">
-        <CardHeader
-          icon={<IconSparkles size={18} />}
-          title="Brand-voice controls"
-          subtitle="Dial the voice; changes apply to new drafts you generate."
-        />
-        <CardBody>
-          <VoicePanel voice={voice} onChange={updateVoice} />
-        </CardBody>
-      </Card>
-
-      {/* draft bake-off */}
-      <Card>
-        <CardHeader
-          icon={<IconRoute size={18} />}
-          title="Draft & model bake-off"
-          subtitle="Generate a draft, then swap the model and compare on brand-match, speed, and read."
-          actions={
-            drafts.length > 0 && (
-              <Badge tone="neutral">{drafts.length} variant{drafts.length > 1 ? 's' : ''}</Badge>
-            )
-          }
-        />
-        <CardBody className="space-y-4">
-          {!brief && (
-            <div className="rounded-lg border border-dashed border-ink-200 bg-ink-50/60 px-4 py-3 text-sm text-ink-500">
-              Generate the brief first — drafts are written against it.
-            </div>
-          )}
-
-          {brief && (
-            <div className="flex flex-wrap items-end gap-3 rounded-xl border border-ink-200 bg-ink-50/50 p-3">
-              <label className="text-xs font-medium text-ink-600">
-                Drafting model
-                <input
-                  value={draftModel}
-                  onChange={(e) => setDraftModel(e.target.value)}
-                  className="mt-1 block h-9 w-64 rounded-lg border border-ink-200 bg-white px-3 font-mono text-xs text-ink-800 focus:border-straive-400 focus:outline-none focus:ring-2 focus:ring-straive-500/20"
-                />
-              </label>
-              <Button
-                variant="primary"
-                icon={<IconBolt size={15} />}
-                loading={draftRunningModel === draftModel}
-                disabled={!!draftRunningModel || !draftModel.trim()}
-                onClick={() => generateDraft(draftModel.trim())}
-              >
-                {drafts.length ? 'Run variant' : 'Generate draft'}
-              </Button>
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-xs text-ink-400">Try:</span>
-                {BAKEOFF_SUGGESTIONS.map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => setDraftModel(m)}
-                    className={cn(
-                      'rounded-md border px-2 py-1 text-xs font-medium transition',
-                      draftModel === m
-                        ? 'border-straive-300 bg-straive-50 text-straive-700'
-                        : 'border-ink-200 bg-white text-ink-600 hover:border-ink-300',
-                    )}
-                  >
-                    {friendlyModel(m)}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {drafts.length === 0 ? (
-            brief && (
+            {brief ? (
+              briefEditing ? (
+                <BriefEditor brief={brief} onChange={updateBrief} />
+              ) : (
+                <BriefBody brief={brief} watchRules={watchRules} />
+              )
+            ) : (
               <EmptyState
                 icon={<IconDoc size={20} />}
-                title="No drafts yet"
-                description="Generate your first draft, then run another model to compare side by side."
+                title="No brief yet"
+                description="Add any direction above (optional), then generate a brief to define the objective, angle, structure, and mandatory disclosures before drafting."
               />
-            )
-          ) : (
-            <div
-              className={cn(
-                'grid gap-4',
-                drafts.length > 1 ? 'lg:grid-cols-2' : 'grid-cols-1',
-              )}
-            >
-              {drafts.map((d) => (
-                <DraftCard
-                  key={d.id}
-                  draft={d}
-                  summary={draftSummaries.get(d.id)}
-                  chosen={d.id === chosenDraftId}
-                  isTop={drafts.length > 1 && d.brandMatch.score === topScore}
-                  isSafest={drafts.length > 1 && d.id === safestDraftId}
-                  onChoose={() => chooseDraft(d.id)}
-                  onRemove={() => removeDraft(d.id)}
-                />
-              ))}
-            </div>
-          )}
-        </CardBody>
-      </Card>
-
-      {/* finalize the chosen draft — manual edit + AI-assist */}
-      {chosen && (
-        <Card className="mt-5">
-          <CardHeader
-            icon={<IconSparkles size={18} />}
-            title="Finalize the chosen draft"
-            subtitle="Edit directly, or use an AI assist. Select text first to target a passage; otherwise the whole draft is refined."
-            actions={
-              <div className="flex items-center gap-2">
-                {chosen.edited && <Badge tone="accent">Edited</Badge>}
-                <ModelTag role="copy" modelLabel={chosen.modelLabel} mode={chosen.mode} />
-              </div>
-            }
-          />
-          <CardBody>
-            <DraftEditor
-              key={chosen.id}
-              draft={chosen}
-              summary={chosenSummary}
-              onCommit={(title, body) => commitDraftEdit(chosen.id, title, body)}
-              runRefine={runRefine}
-            />
+            )}
           </CardBody>
-        </Card>
-      )}
+        ) : (
+          brief && (
+            <CardBody className="py-3">
+              <p className="truncate text-sm text-ink-500">
+                <span className="font-medium text-ink-600">Angle:</span> {brief.angle}
+              </p>
+            </CardBody>
+          )
+        )}
+      </Card>
+      </div>
+
+      {/* master-detail: bake-off list (left) + finalize editor (right) */}
+      <div className="grid items-start gap-5 lg:grid-cols-[minmax(320px,360px)_1fr]">
+        {/* LEFT — bake-off */}
+        <div className="space-y-4 lg:sticky lg:top-4">
+          <Card>
+            <CardHeader
+              icon={<IconRoute size={18} />}
+              title="Draft bake-off"
+              subtitle="Generate, swap models, and compare."
+              actions={
+                drafts.length > 0 ? (
+                  <Badge tone="neutral">{drafts.length} variant{drafts.length > 1 ? 's' : ''}</Badge>
+                ) : undefined
+              }
+            />
+            <CardBody className="space-y-3">
+              {!brief && (
+                <div className="rounded-lg border border-dashed border-ink-200 bg-ink-50/60 px-4 py-3 text-sm text-ink-500">
+                  Generate the brief first — drafts are written against it.
+                </div>
+              )}
+
+              {brief && (
+                <div className="space-y-2 rounded-xl border border-ink-200 bg-ink-50/50 p-3">
+                  <label className="block text-xs font-medium text-ink-600">
+                    Drafting model
+                    <input
+                      value={draftModel}
+                      onChange={(e) => setDraftModel(e.target.value)}
+                      className="mt-1 block h-9 w-full rounded-lg border border-ink-200 bg-white px-3 font-mono text-xs text-ink-800 focus:border-straive-400 focus:outline-none focus:ring-2 focus:ring-straive-500/20"
+                    />
+                  </label>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-xs text-ink-400">Try:</span>
+                    {BAKEOFF_SUGGESTIONS.map((m) => (
+                      <button
+                        key={m}
+                        onClick={() => setDraftModel(m)}
+                        className={cn(
+                          'rounded-md border px-2 py-1 text-xs font-medium transition',
+                          draftModel === m
+                            ? 'border-straive-300 bg-straive-50 text-straive-700'
+                            : 'border-ink-200 bg-white text-ink-600 hover:border-ink-300',
+                        )}
+                      >
+                        {friendlyModel(m)}
+                      </button>
+                    ))}
+                  </div>
+                  <Button
+                    variant="primary"
+                    className="w-full"
+                    icon={<IconBolt size={15} />}
+                    loading={draftRunningModel === draftModel}
+                    disabled={!!draftRunningModel || !draftModel.trim()}
+                    onClick={() => generateDraft(draftModel.trim())}
+                  >
+                    {drafts.length ? 'Run variant' : 'Generate draft'}
+                  </Button>
+                </div>
+              )}
+
+              {/* brand voice (collapsible) */}
+              {brief && (
+                <div className="rounded-xl border border-ink-200 bg-white">
+                  <button
+                    onClick={() => setVoiceOpen((v) => !v)}
+                    className="flex w-full items-center justify-between px-3 py-2 text-left"
+                  >
+                    <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-ink-700">
+                      <IconSparkles size={13} /> Brand voice
+                    </span>
+                    <IconChevron
+                      size={14}
+                      className={cn('text-ink-400 transition-transform', voiceOpen && 'rotate-180')}
+                    />
+                  </button>
+                  {voiceOpen && (
+                    <div className="border-t border-ink-100 p-3">
+                      <VoicePanel voice={voice} onChange={updateVoice} />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* variant rows */}
+              {drafts.length === 0
+                ? brief && (
+                    <div className="rounded-lg border border-dashed border-ink-200 px-4 py-6 text-center text-sm text-ink-400">
+                      No drafts yet — generate your first, then run another model to compare.
+                    </div>
+                  )
+                : (
+                    <div className="space-y-2">
+                      {drafts.map((d) => (
+                        <DraftRow
+                          key={d.id}
+                          draft={d}
+                          summary={draftSummaries.get(d.id)}
+                          selected={d.id === chosenDraftId}
+                          isTop={drafts.length > 1 && d.brandMatch.score === topScore}
+                          isSafest={drafts.length > 1 && d.id === safestDraftId}
+                          onSelect={() => chooseDraft(d.id)}
+                          onRemove={() => removeDraft(d.id)}
+                        />
+                      ))}
+                    </div>
+                  )}
+            </CardBody>
+          </Card>
+        </div>
+
+        {/* RIGHT — finalize editor / overview */}
+        <div>
+          {chosen ? (
+            <Card>
+              <CardHeader
+                icon={<IconSparkles size={18} />}
+                title="Finalize draft"
+                subtitle="Edit directly or use an AI assist. Select text to target a passage; otherwise the whole draft is refined."
+                actions={
+                  <div className="flex items-center gap-2">
+                    {chosen.edited && <Badge tone="accent">Edited</Badge>}
+                    <ModelTag role="copy" modelLabel={chosen.modelLabel} mode={chosen.mode} />
+                  </div>
+                }
+              />
+              <CardBody>
+                <DraftEditor
+                  key={chosen.id}
+                  draft={chosen}
+                  preview={previewDraft}
+                  onSave={(title, body) => commitDraftEdit(chosen.id, title, body)}
+                  runRefine={runRefine}
+                />
+              </CardBody>
+            </Card>
+          ) : (
+            <Card>
+              <CardBody>
+                <EmptyState
+                  icon={<IconSparkles size={22} />}
+                  title={drafts.length ? 'Select a draft to finalize' : 'Generate a draft to begin'}
+                  description={
+                    drafts.length
+                      ? 'Pick a variant from the bake-off on the left to edit it, refine with AI, and save.'
+                      : 'Generate the brief, then run a model to produce your first draft.'
+                  }
+                />
+              </CardBody>
+            </Card>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
@@ -764,92 +833,85 @@ function Dial({
 
 // ── Draft card ─────────────────────────────────────────────────────────────
 
-function DraftCard({
+/** Compact selectable row in the bake-off list (left column). */
+function DraftRow({
   draft,
   summary,
-  chosen,
+  selected,
   isTop,
   isSafest,
-  onChoose,
+  onSelect,
   onRemove,
 }: {
   draft: DraftVariant
   summary?: DraftComplianceSummary
-  chosen: boolean
+  selected: boolean
   isTop: boolean
   isSafest: boolean
-  onChoose: () => void
+  onSelect: () => void
   onRemove: () => void
 }) {
   const cost = draft.usage ? estimateCostUsd(draft.modelId, 'copy', draft.usage) : undefined
   return (
     <div
+      role="button"
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && onSelect()}
       className={cn(
-        'flex flex-col rounded-xl border bg-white transition',
-        chosen ? 'border-straive-400 shadow-cardHover ring-1 ring-straive-200' : 'border-ink-200',
+        'group cursor-pointer rounded-xl border bg-white p-3 text-left transition',
+        selected
+          ? 'border-straive-400 bg-straive-50/40 ring-1 ring-straive-200'
+          : 'border-ink-200 hover:border-ink-300 hover:bg-ink-50/60',
       )}
     >
-      <div className="flex items-center justify-between gap-2 border-b border-ink-100 px-4 py-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <ModelTag role="copy" modelLabel={draft.modelLabel} mode={draft.mode} />
-          {isTop && <Badge tone="ok">Top brand-match</Badge>}
-          {isSafest && <Badge tone="info">Closest to compliant</Badge>}
-          {draft.edited && <Badge tone="accent">Edited</Badge>}
-          {chosen && <Badge tone="accent">Chosen</Badge>}
-        </div>
-        <button
-          onClick={onRemove}
-          aria-label="Remove draft"
-          className="text-ink-300 transition hover:text-crit"
-        >
-          <IconTrash size={15} />
-        </button>
-      </div>
-
-      <div className="flex items-center gap-4 border-b border-ink-100 bg-ink-50/50 px-4 py-2.5">
-        <ScoreGauge value={draft.brandMatch.score} size={54} />
-        <div className="grid flex-1 grid-cols-2 gap-2 text-xs">
-          <Metric label="Brand-match" value={`${draft.brandMatch.score}/100`} />
-          <Metric label="Words" value={draft.wordCount} />
-          <Metric label="Latency" value={fmtMs(draft.latencyMs)} />
-          <Metric
-            label="Cost (est.)"
-            value={cost !== undefined ? fmtUsd(cost) : '—'}
-          />
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <ModelTag role="copy" modelLabel={draft.modelLabel} mode={draft.mode} />
+        <div className="flex items-center gap-1.5">
+          <span className="text-sm font-bold tabular-nums text-ink-800">{draft.brandMatch.score}</span>
+          <span className="text-[10px] text-ink-400">match</span>
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              onRemove()
+            }}
+            aria-label="Remove draft"
+            className="ml-1 text-ink-300 transition hover:text-crit"
+          >
+            <IconTrash size={14} />
+          </button>
         </div>
       </div>
 
-      {summary && <ComplianceStrip summary={summary} />}
+      <div className="mb-2 flex flex-wrap items-center gap-1.5">
+        {selected && <Badge tone="accent">Selected</Badge>}
+        {isTop && <Badge tone="ok">Top match</Badge>}
+        {isSafest && <Badge tone="info">Closest to compliant</Badge>}
+        {draft.edited && <Badge tone="accent">Edited</Badge>}
+      </div>
 
-      {(draft.brandMatch.hit.length > 0 || draft.brandMatch.missed.length > 0) && (
-        <div className="flex flex-wrap gap-1.5 border-b border-ink-100 px-4 py-2">
-          {draft.brandMatch.hit.slice(0, 3).map((h, i) => (
-            <span key={i} className="rounded bg-ok/10 px-1.5 py-0.5 text-[10px] font-medium text-ok">
-              {h}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-500">
+        <span>{draft.wordCount} words</span>
+        <span className="text-ink-300">·</span>
+        <span>{fmtMs(draft.latencyMs)}</span>
+        <span className="text-ink-300">·</span>
+        <span>{cost !== undefined ? fmtUsd(cost) : '—'}</span>
+        {summary && (
+          <>
+            <span className="text-ink-300">·</span>
+            <span
+              className={cn(
+                'inline-flex items-center gap-1 font-medium',
+                summary.disclosuresPresent === summary.disclosuresTotal ? 'text-ok' : 'text-warn',
+              )}
+            >
+              <IconShield size={11} /> {summary.disclosuresPresent}/{summary.disclosuresTotal}
+              {summary.critical + summary.major > 0 && (
+                <span className="text-crit">· {summary.critical + summary.major} sev</span>
+              )}
             </span>
-          ))}
-          {draft.brandMatch.missed.map((m, i) => (
-            <span key={i} className="rounded bg-crit/10 px-1.5 py-0.5 text-[10px] font-medium text-crit">
-              {m}
-            </span>
-          ))}
-        </div>
-      )}
-
-      <div className="max-h-[420px] flex-1 overflow-y-auto px-4 py-3">
-        <Markdown source={`# ${draft.title}\n\n${draft.body}`} />
-      </div>
-
-      <div className="border-t border-ink-100 p-3">
-        <Button
-          variant={chosen ? 'secondary' : 'primary'}
-          size="sm"
-          className="w-full"
-          icon={chosen ? <IconCheck size={15} /> : undefined}
-          onClick={onChoose}
-        >
-          {chosen ? 'Selected for Visuals' : 'Use this draft'}
-        </Button>
+          </>
+        )}
       </div>
     </div>
   )
@@ -1035,25 +1097,27 @@ function EditField({ label, children }: { label: string; children: React.ReactNo
 
 function DraftEditor({
   draft,
-  summary,
-  onCommit,
+  preview,
+  onSave,
   runRefine,
 }: {
   draft: DraftVariant
-  summary: DraftComplianceSummary | null
-  onCommit: (title: string, body: string) => void
+  preview: (title: string, body: string) => {
+    brandMatch: DraftVariant['brandMatch']
+    wordCount: number
+    summary: DraftComplianceSummary
+  }
+  onSave: (title: string, body: string) => void
   runRefine: (action: RefineAction, text: string, missing: string[]) => Promise<string>
 }) {
   const [title, setTitle] = useState(draft.title)
   const [body, setBody] = useState(draft.body)
   const [busy, setBusy] = useState<RefineAction | null>(null)
+  const [mode, setMode] = useState<'edit' | 'preview'>('edit')
   const taRef = useRef<HTMLTextAreaElement>(null)
 
-  function commit(nextTitle: string, nextBody: string) {
-    setTitle(nextTitle)
-    setBody(nextBody)
-    onCommit(nextTitle, nextBody)
-  }
+  const dirty = title !== draft.title || body !== draft.body
+  const live = useMemo(() => preview(title, body), [title, body, preview])
 
   async function refine(action: RefineAction) {
     const ta = taRef.current
@@ -1061,12 +1125,12 @@ function DraftEditor({
     const selEnd = ta?.selectionEnd ?? 0
     const hasSel = action !== 'disclosures' && selEnd > selStart
     const target = hasSel ? body.slice(selStart, selEnd) : body
-    const missing = summary?.missingDisclosures ?? []
+    const missing = live.summary.missingDisclosures
     setBusy(action)
     try {
       const out = await runRefine(action, target, missing)
-      const nextBody = hasSel ? body.slice(0, selStart) + out + body.slice(selEnd) : out
-      commit(title, nextBody)
+      // Refine writes into the buffer only — the user still Saves explicitly.
+      setBody(hasSel ? body.slice(0, selStart) + out + body.slice(selEnd) : out)
     } catch {
       /* error toast is raised upstream */
     } finally {
@@ -1080,42 +1144,115 @@ function DraftEditor({
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
-          AI assist
-        </span>
-        {actions.map((a) => (
-          <Button
-            key={a}
-            variant="secondary"
-            size="sm"
-            loading={busy === a}
-            disabled={!!busy}
-            icon={busy !== a ? <IconSparkles size={14} /> : undefined}
-            onClick={() => refine(a)}
-          >
-            {REFINE_META[a].label}
-          </Button>
-        ))}
+      {/* live metrics */}
+      <div className="flex items-center gap-4 rounded-xl border border-ink-100 bg-ink-50/50 px-4 py-2.5">
+        <ScoreGauge value={live.brandMatch.score} size={50} />
+        <div className="grid flex-1 grid-cols-3 gap-2 text-xs">
+          <Metric label="Brand-match" value={`${live.brandMatch.score}/100`} />
+          <Metric label="Words" value={live.wordCount} />
+          <Metric
+            label="Cost (est.)"
+            value={draft.usage ? fmtUsd(estimateCostUsd(draft.modelId, 'copy', draft.usage)) : '—'}
+          />
+        </div>
       </div>
-      <input
-        className={cn(fieldCls, 'font-semibold')}
-        value={title}
-        onChange={(e) => commit(e.target.value, body)}
-        placeholder="Draft title"
-      />
-      <textarea
-        ref={taRef}
-        className={cn(fieldCls, 'font-mono text-[13px] leading-relaxed')}
-        rows={16}
-        value={body}
-        onChange={(e) => commit(title, e.target.value)}
-        spellCheck
-      />
+      <ComplianceStrip summary={live.summary} />
+
+      {/* edit / preview toggle */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="inline-flex rounded-lg border border-ink-200 p-0.5">
+          {(['edit', 'preview'] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => setMode(m)}
+              className={cn(
+                'rounded-md px-3 py-1 text-xs font-medium capitalize transition',
+                mode === m ? 'bg-navy-900 text-white' : 'text-ink-500 hover:text-ink-800',
+              )}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+        {mode === 'edit' && (
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
+            <span className="mr-1 hidden text-[11px] font-semibold uppercase tracking-wide text-ink-400 sm:inline">
+              AI assist
+            </span>
+            {actions.map((a) => (
+              <Button
+                key={a}
+                variant="secondary"
+                size="sm"
+                loading={busy === a}
+                disabled={!!busy}
+                icon={busy !== a ? <IconSparkles size={14} /> : undefined}
+                onClick={() => refine(a)}
+              >
+                {REFINE_META[a].label}
+              </Button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {mode === 'preview' ? (
+        <div className="max-h-[520px] overflow-y-auto rounded-lg border border-ink-100 bg-white px-4 py-3">
+          <Markdown source={`# ${title}\n\n${body}`} />
+        </div>
+      ) : (
+        <>
+          <input
+            className={cn(fieldCls, 'font-semibold')}
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Draft title"
+          />
+          <textarea
+            ref={taRef}
+            className={cn(fieldCls, 'font-mono text-[13px] leading-relaxed')}
+            rows={18}
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            spellCheck
+          />
+        </>
+      )}
+
+      {/* save bar */}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-ink-100 pt-3">
+        <span className={cn('text-xs', dirty ? 'font-medium text-warn' : 'text-ink-400')}>
+          {dirty ? 'Unsaved changes' : 'All changes saved'}
+        </span>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={!dirty}
+            onClick={() => {
+              setTitle(draft.title)
+              setBody(draft.body)
+            }}
+          >
+            Revert
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            icon={<IconCheck size={15} />}
+            disabled={!dirty}
+            onClick={() => onSave(title, body)}
+          >
+            Save changes
+          </Button>
+        </div>
+      </div>
+
       <p className="flex items-start gap-1.5 text-xs text-ink-400">
         <IconAlert size={13} className="mt-0.5 shrink-0" />
-        Edits re-score brand-match and the compliance preview live, and carry to Visuals.
-        Placeholders like [APR] are preserved — approved figures are added at the compliance gate.
+        Metrics and the compliance preview update as you type; <strong>Save</strong> persists the draft
+        and carries it to Visuals. Placeholders like [APR] are preserved — approved figures are added at
+        the compliance gate.
       </p>
     </div>
   )

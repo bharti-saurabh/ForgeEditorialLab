@@ -388,6 +388,8 @@ export interface VisualAsset {
   imageModelLabel: string
   imageMode: CallMode
   imageLatencyMs: number
+  /** estimated USD cost of the image call (illustrative) */
+  costUsd?: number
   caption: string
   altText: string
   textModelLabel: string
@@ -426,6 +428,8 @@ export interface ComplianceIssue {
   editText?: string
   /** reviewer's justification when decision === 'overridden' */
   overrideReason?: string
+  /** raised by the human reviewer (or promoted from a net-impression check) rather than the rule engine */
+  manual?: boolean
 }
 
 export interface DisclosureCheck {
@@ -433,6 +437,8 @@ export interface DisclosureCheck {
   text: string
   present: boolean
   source: 'rulebook' | 'legal-line'
+  /** satisfied via a "see terms" link cue rather than inline (short-form channels) */
+  linked?: boolean
 }
 
 export type AuditAction =
@@ -464,6 +470,9 @@ export interface SignOff {
 
 export interface ComplianceState {
   runAt: number
+  /** signature of the copy + visuals this review pertains to; a later edit that
+   *  changes it makes the sign-off stale (must re-run before publish) */
+  reviewedSig?: string
   /** narrative AI assessment (model-labelled) */
   assessment: string
   assessmentModelLabel: string

@@ -19,7 +19,12 @@ import {
   issueCounts,
   recommendation,
   buildCleanVersion,
+  contentSignature,
+  explainScore,
+  netImpressionChecks,
 } from '@/lib/complianceEngine'
+import { channelMeta } from '@/lib/publish'
+import { channelSpec } from '@/lib/channels'
 import {
   COMPLIANCE_SYSTEM,
   buildAssessmentPrompt,
@@ -32,8 +37,11 @@ import type {
   ComplianceIssue,
   ComplianceState,
   DraftVariant,
+  IssueElement,
+  RuleSeverity,
   SignOff,
   SignOffDecision,
+  VisualAsset,
 } from '@/types'
 import {
   IconShield,
@@ -55,7 +63,8 @@ export function ComplianceView() {
   const pipeline = useAppStore((s) => s.pipeline)
   const setCompliance = useAppStore((s) => s.setCompliance)
   const resolveIssue = useAppStore((s) => s.resolveIssue)
-  const applyCleanVersion = useAppStore((s) => s.applyCleanVersion)
+  const addComplianceIssue = useAppStore((s) => s.addComplianceIssue)
+  const applyCleanToDraft = useAppStore((s) => s.applyCleanToDraft)
   const signCompliance = useAppStore((s) => s.signCompliance)
   const requestRevisions = useAppStore((s) => s.requestRevisions)
 
@@ -95,7 +104,9 @@ export function ComplianceView() {
     if (!topic || !draft) return
     setRunning(true)
     try {
-      const analysis = analyzeContent(draft, pipeline.visuals, topic, SEED_RULEBOOK, profile)
+      const analysis = analyzeContent(draft, pipeline.visuals, topic, SEED_RULEBOOK, profile, {
+        allowLinkedDisclosure: channelMeta(pipeline.primaryChannel).allowsLinkedDisclosure,
+      })
       const copy = `${draft.title}\n${draft.body}`
       const { text, mode, entry } = await runChat({
         role: 'strategy',
@@ -109,6 +120,7 @@ export function ComplianceView() {
       })
       const state: ComplianceState = {
         runAt: entry.ts,
+        reviewedSig: contentSignature(draft, pipeline.visuals),
         assessment: text,
         assessmentModelLabel: entry.modelLabel,
         assessmentMode: mode,
@@ -136,8 +148,13 @@ export function ComplianceView() {
     }
   }
 
+  const heroVisual = pipeline.visuals.find((v) => v.role === 'hero') ?? pipeline.visuals[0] ?? null
+  // The sign-off / review is stale if the copy or visuals changed since it ran.
+  const stale =
+    !!compliance?.reviewedSig && contentSignature(draft, pipeline.visuals) !== compliance.reviewedSig
+
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="mx-auto max-w-7xl">
       <SectionTitle
         title="Step 4 · Legal & Compliance"
         description="Rule-cited review of copy + visuals, with human sign-off and a full audit trail."
@@ -186,21 +203,37 @@ export function ComplianceView() {
 
       <Disclaimer kind="legal" className="mb-5" />
 
-      {/* Review the piece as it will actually appear on its channel — net
-          impression is assessed on the rendered artifact, not loose copy. */}
+      {stale && (
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warn/40 bg-warn/5 px-4 py-2.5 text-sm text-warn">
+          <span className="inline-flex items-center gap-2">
+            <IconAlert size={16} />
+            The copy or visuals changed since this review — the result and any sign-off are stale.
+          </span>
+          <Button variant="secondary" size="sm" loading={running} onClick={runReview}>
+            Re-run gate
+          </Button>
+        </div>
+      )}
+
+      {/* top summary — what you're signing off (net impression on the artifact) */}
       <Card className="mb-5">
         <CardHeader
           icon={<IconEye size={18} />}
           title="What you're signing off"
-          subtitle="The piece as it appears on its publish channel — review net impression here, not just the raw copy."
+          subtitle={`${channelSpec(pipeline.primaryChannel).label} · review net impression on the rendered post, not just raw copy.`}
         />
-        <CardBody>
-          <PostPreview
-            channel={pipeline.primaryChannel}
-            profile={profile}
-            draft={draft}
-            visual={pipeline.visuals.find((v) => v.role === 'hero') ?? pipeline.visuals[0] ?? null}
-          />
+        <CardBody className="space-y-4">
+          <PostPreview channel={pipeline.primaryChannel} profile={profile} draft={draft} visual={heroVisual} />
+          {compliance && (
+            <NetImpressionPanel
+              draft={draft}
+              visuals={pipeline.visuals}
+              onFlag={(issue) => {
+                addComplianceIssue(issue, actor)
+                pushToast('info', 'Net-impression concern promoted to a finding.')
+              }}
+            />
+          )}
         </CardBody>
       </Card>
 
@@ -213,8 +246,9 @@ export function ComplianceView() {
             <h3 className="text-lg font-bold text-ink-900">Run the compliance gate</h3>
             <p className="mx-auto mt-1 max-w-md text-sm text-ink-500">
               Scans "{draft.title}" and {pipeline.visuals.length} visual(s) against the rulebook
-              (UDAAP, Reg Z/TILA, Reg B/ECOA, FTC) + the brand's compliance fingerprint. Every
-              finding cites a rule; you decide each one and sign off.
+              (UDAAP, Reg Z/TILA, Reg B/ECOA, FTC) + the brand's compliance fingerprint, tuned for{' '}
+              {channelSpec(pipeline.primaryChannel).label}. Every finding cites a rule; you decide each
+              one and sign off.
             </p>
             <div className="mt-6">
               <Button variant="primary" loading={running} icon={!running ? <IconBolt size={15} /> : undefined} onClick={runReview}>
@@ -227,13 +261,18 @@ export function ComplianceView() {
         <ComplianceResult
           compliance={compliance}
           draft={draft}
+          stale={stale}
           reviewer={reviewer}
           setReviewer={setReviewer}
           actor={actor}
           onResolve={resolveIssue}
+          onAddFinding={(issue) => {
+            addComplianceIssue(issue, actor)
+            pushToast('success', 'Finding added.')
+          }}
           onApplyClean={() => {
-            applyCleanVersion(actor)
-            pushToast('success', 'Clean version prepared with rewrites + disclosures.')
+            applyCleanToDraft(actor)
+            pushToast('success', 'Fixes written back to the draft — re-run to confirm it clears.')
           }}
           onSign={(so) => {
             signCompliance(so)
@@ -251,19 +290,23 @@ export function ComplianceView() {
 function ComplianceResult({
   compliance,
   draft,
+  stale,
   reviewer,
   setReviewer,
   actor,
   onResolve,
+  onAddFinding,
   onApplyClean,
   onSign,
 }: {
   compliance: ComplianceState
   draft: DraftVariant
+  stale: boolean
   reviewer: string
   setReviewer: (s: string) => void
   actor: string
   onResolve: ReturnType<typeof useAppStore.getState>['resolveIssue']
+  onAddFinding: (issue: ComplianceIssue) => void
   onApplyClean: () => void
   onSign: (so: SignOff) => void
 }) {
@@ -271,7 +314,17 @@ function ComplianceResult({
   const counts = issueCounts(compliance.issues)
   const rec = recommendation(score, counts.critical)
   const passChecks = compliance.checklist.filter((c) => c.present).length
+  const breakdown = explainScore(compliance)
   const [tab, setTab] = useState<'redline' | 'clean'>('redline')
+  const [showBreakdown, setShowBreakdown] = useState(false)
+  const [activeId, setActiveId] = useState<string | null>(null)
+  const [adding, setAdding] = useState(false)
+
+  const activeIssue = compliance.issues.find((i) => i.id === activeId) ?? null
+  const activeCheck = compliance.checklist.find((c) => c.id === activeId) ?? null
+  const canWriteBack =
+    compliance.checklist.some((c) => !c.present) ||
+    compliance.issues.some((i) => i.decision === 'accepted' || i.decision === 'edited')
 
   return (
     <div className="space-y-5">
@@ -284,7 +337,8 @@ function ComplianceResult({
               <Badge tone={counts.critical ? 'crit' : score >= 90 ? 'ok' : 'warn'} dot>
                 {rec}
               </Badge>
-              {compliance.cleanApplied && <Badge tone="info">Clean version prepared</Badge>}
+              {compliance.cleanApplied && <Badge tone="info">Fixes written to draft</Badge>}
+              {stale && <Badge tone="warn">Stale — re-run</Badge>}
               {compliance.initialScore !== score && (
                 <span className="text-xs text-ink-400">
                   Initial {compliance.initialScore} → now {score}
@@ -301,88 +355,217 @@ function ComplianceResult({
                 tone={passChecks === compliance.checklist.length ? 'ok' : 'warn'}
               />
             </div>
-          </div>
-        </CardBody>
-      </Card>
-
-      {/* AI assessment */}
-      <Card>
-        <CardHeader icon={<IconEye size={18} />} title="Reviewer assessment" subtitle="AI decision support — not the basis for sign-off on its own." />
-        <CardBody>
-          <div className="mb-3 flex items-center gap-2">
-            <ModelTag role="strategy" modelLabel={compliance.assessmentModelLabel} mode={compliance.assessmentMode} />
-            <span className="text-xs text-ink-400">Run {fmtDateTime(compliance.runAt)}</span>
-          </div>
-          <div className="space-y-2 text-sm leading-relaxed text-ink-700">
-            {compliance.assessment.split('\n\n').map((p, i) => (
-              <p key={i} className={cn(p.startsWith('Recommendation') && 'font-semibold text-ink-900')}>
-                {p}
-              </p>
-            ))}
-          </div>
-        </CardBody>
-      </Card>
-
-      {/* issues */}
-      <Card>
-        <CardHeader
-          icon={<IconAlert size={18} />}
-          title={`Findings (${compliance.issues.length})`}
-          subtitle="Each cites a rule. Accept the rewrite, edit it, or override with a documented reason."
-        />
-        <CardBody className="space-y-3">
-          {compliance.issues.length === 0 ? (
-            <div className="rounded-lg border border-ok/25 bg-ok/5 px-4 py-3 text-sm text-ok">
-              No rule triggers fired. Confirm the disclosure checklist below before sign-off.
-            </div>
-          ) : (
-            compliance.issues.map((issue) => (
-              <IssueCard key={issue.id} issue={issue} actor={actor} onResolve={onResolve} />
-            ))
-          )}
-        </CardBody>
-      </Card>
-
-      {/* disclosure checklist */}
-      <Card>
-        <CardHeader
-          icon={<IconCheck size={18} />}
-          title="Disclosure checklist"
-          subtitle="Required disclosures + legal lines for this topic."
-          actions={
-            !compliance.cleanApplied &&
-            compliance.checklist.some((c) => !c.present) && (
-              <Button variant="secondary" size="sm" onClick={onApplyClean}>
-                Apply clean version
-              </Button>
-            )
-          }
-        />
-        <CardBody className="space-y-1.5">
-          {compliance.checklist.map((c) => {
-            const ok = c.present || compliance.cleanApplied
-            return (
-              <div key={c.id} className="flex items-start gap-2.5 text-sm">
-                <span
-                  className={cn(
-                    'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full',
-                    ok ? 'bg-ok/15 text-ok' : 'bg-crit/15 text-crit',
-                  )}
-                >
-                  {ok ? <IconCheck size={11} /> : <IconX size={11} />}
-                </span>
-                <span className="flex-1 text-ink-700">{c.text}</span>
-                <Badge tone={c.source === 'legal-line' ? 'navy' : 'neutral'}>
-                  {c.source === 'legal-line' ? 'Legal line' : 'Disclosure'}
-                </Badge>
-                {!c.present && compliance.cleanApplied && (
-                  <span className="text-[11px] text-info">appended</span>
+            <button
+              onClick={() => setShowBreakdown((v) => !v)}
+              className="mt-2 text-xs font-medium text-ink-500 hover:text-ink-800"
+            >
+              {showBreakdown ? 'Hide' : 'Why this score?'} ({breakdown.lines.length} deduction
+              {breakdown.lines.length === 1 ? '' : 's'})
+            </button>
+            {showBreakdown && (
+              <div className="mt-2 space-y-1 rounded-lg border border-ink-100 bg-ink-50/50 p-3 text-xs">
+                <div className="flex items-center justify-between text-ink-500">
+                  <span>Base</span>
+                  <span className="tabular-nums">100</span>
+                </div>
+                {breakdown.lines.map((l, i) => (
+                  <div key={i} className="flex items-center justify-between gap-3">
+                    <span className="min-w-0 flex-1 truncate text-ink-600">{l.label}</span>
+                    <span className="shrink-0 tabular-nums font-medium text-crit">{l.delta}</span>
+                  </div>
+                ))}
+                {compliance.cleanApplied && (
+                  <div className="text-ink-400">Disclosure gaps waived (fixes applied).</div>
                 )}
+                <div className="mt-1 flex items-center justify-between border-t border-ink-200 pt-1 font-semibold text-ink-900">
+                  <span>Score</span>
+                  <span className="tabular-nums">{breakdown.total}/100</span>
+                </div>
               </div>
-            )
-          })}
+            )}
+          </div>
         </CardBody>
       </Card>
+
+      {/* master-detail: worklist (left) + selected item / assessment (right) */}
+      <div className="grid items-start gap-5 lg:grid-cols-[minmax(300px,340px)_1fr]">
+        {/* LEFT — worklist */}
+        <div className="space-y-4 lg:sticky lg:top-4">
+          <Card>
+            <CardHeader
+              icon={<IconAlert size={18} />}
+              title={`Findings (${compliance.issues.length})`}
+              subtitle="Select a finding to resolve it."
+              actions={
+                <div className="flex items-center gap-1.5">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setActiveId(null)
+                      setAdding(true)
+                    }}
+                  >
+                    + Add
+                  </Button>
+                  {canWriteBack && (
+                    <Button variant="secondary" size="sm" onClick={onApplyClean}>
+                      Apply fixes
+                    </Button>
+                  )}
+                </div>
+              }
+            />
+            <CardBody className="space-y-1.5">
+              {compliance.issues.length === 0 ? (
+                <div className="rounded-lg border border-ok/25 bg-ok/5 px-3 py-2 text-sm text-ok">
+                  No rule triggers fired.
+                </div>
+              ) : (
+                compliance.issues.map((issue) => (
+                  <FindingRow
+                    key={issue.id}
+                    issue={issue}
+                    active={issue.id === activeId}
+                    onClick={() => {
+                      setAdding(false)
+                      setActiveId(issue.id === activeId ? null : issue.id)
+                    }}
+                  />
+                ))
+              )}
+            </CardBody>
+          </Card>
+
+          <Card>
+            <CardHeader
+              icon={<IconCheck size={18} />}
+              title="Disclosures"
+              subtitle={`${passChecks}/${compliance.checklist.length} satisfied`}
+            />
+            <CardBody className="space-y-1">
+              {compliance.checklist.map((c) => {
+                const ok = c.present || compliance.cleanApplied
+                return (
+                  <button
+                    key={c.id}
+                    onClick={() => {
+                      setAdding(false)
+                      setActiveId(c.id === activeId ? null : c.id)
+                    }}
+                    className={cn(
+                      'flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition',
+                      c.id === activeId ? 'bg-straive-50/60 ring-1 ring-straive-200' : 'hover:bg-ink-50',
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full',
+                        ok ? 'bg-ok/15 text-ok' : 'bg-crit/15 text-crit',
+                      )}
+                    >
+                      {ok ? <IconCheck size={11} /> : <IconX size={11} />}
+                    </span>
+                    <span className="flex-1 truncate text-ink-700">{c.text}</span>
+                    {c.linked && <Badge tone="info">linked</Badge>}
+                  </button>
+                )
+              })}
+            </CardBody>
+          </Card>
+        </div>
+
+        {/* RIGHT — detail / assessment / add-finding */}
+        <div className="space-y-5">
+          {adding ? (
+            <Card>
+              <CardHeader
+                icon={<IconAlert size={18} />}
+                title="Add a finding"
+                subtitle="Raise something the rule engine missed — it scores and resolves like any finding."
+                actions={
+                  <Button variant="ghost" size="sm" onClick={() => setAdding(false)}>
+                    Cancel
+                  </Button>
+                }
+              />
+              <CardBody>
+                <AddFindingForm
+                  onAdd={(issue) => {
+                    onAddFinding(issue)
+                    setAdding(false)
+                  }}
+                />
+              </CardBody>
+            </Card>
+          ) : activeIssue ? (
+            <Card>
+              <CardHeader
+                icon={<IconAlert size={18} />}
+                title="Finding"
+                actions={
+                  <Button variant="ghost" size="sm" onClick={() => setActiveId(null)}>
+                    Back to assessment
+                  </Button>
+                }
+              />
+              <CardBody>
+                <IssueCard issue={activeIssue} actor={actor} onResolve={onResolve} />
+              </CardBody>
+            </Card>
+          ) : activeCheck ? (
+            <Card>
+              <CardHeader
+                icon={<IconCheck size={18} />}
+                title="Disclosure"
+                actions={
+                  <Button variant="ghost" size="sm" onClick={() => setActiveId(null)}>
+                    Back to assessment
+                  </Button>
+                }
+              />
+              <CardBody className="space-y-3">
+                <p className="text-sm text-ink-800">{activeCheck.text}</p>
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <Badge tone={activeCheck.source === 'legal-line' ? 'navy' : 'neutral'}>
+                    {activeCheck.source === 'legal-line' ? 'Legal line' : 'Disclosure'}
+                  </Badge>
+                  <Badge tone={activeCheck.present ? 'ok' : 'crit'} dot>
+                    {activeCheck.present ? (activeCheck.linked ? 'Satisfied via link' : 'Present') : 'Missing'}
+                  </Badge>
+                </div>
+                {!activeCheck.present && (
+                  <p className="text-sm text-ink-500">
+                    Use <span className="font-medium text-ink-700">Apply fixes to draft</span> to append the
+                    required disclosures, or add them in Step 2.
+                  </p>
+                )}
+              </CardBody>
+            </Card>
+          ) : (
+            <Card>
+              <CardHeader
+                icon={<IconEye size={18} />}
+                title="Reviewer assessment"
+                subtitle="AI decision support — not the basis for sign-off on its own."
+              />
+              <CardBody>
+                <div className="mb-3 flex items-center gap-2">
+                  <ModelTag role="strategy" modelLabel={compliance.assessmentModelLabel} mode={compliance.assessmentMode} />
+                  <span className="text-xs text-ink-400">Run {fmtDateTime(compliance.runAt)}</span>
+                </div>
+                <div className="space-y-2 text-sm leading-relaxed text-ink-700">
+                  {compliance.assessment.split('\n\n').map((p, i) => (
+                    <p key={i} className={cn(p.startsWith('Recommendation') && 'font-semibold text-ink-900')}>
+                      {p}
+                    </p>
+                  ))}
+                </div>
+              </CardBody>
+            </Card>
+          )}
+        </div>
+      </div>
 
       {/* redline / clean before-after */}
       <Card>
@@ -421,6 +604,7 @@ function ComplianceResult({
         compliance={compliance}
         score={score}
         openCriticals={counts.critical}
+        stale={stale}
         reviewer={reviewer}
         setReviewer={setReviewer}
         onSign={onSign}
@@ -443,6 +627,201 @@ function ComplianceResult({
           </ol>
         </CardBody>
       </Card>
+    </div>
+  )
+}
+
+/** Compact selectable finding row for the worklist. */
+function FindingRow({
+  issue,
+  active,
+  onClick,
+}: {
+  issue: ComplianceIssue
+  active: boolean
+  onClick: () => void
+}) {
+  const resolved = issue.decision !== 'open'
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        'w-full rounded-lg border p-2.5 text-left transition',
+        active
+          ? 'border-straive-400 bg-straive-50/40 ring-1 ring-straive-200'
+          : 'border-ink-200 bg-white hover:border-ink-300 hover:bg-ink-50/60',
+      )}
+    >
+      <div className="flex items-center gap-2">
+        <Badge tone={severityTone(issue.severity)}>{issue.severity}</Badge>
+        <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink-900">{issue.title}</span>
+        {issue.manual && <Badge tone="info">Manual</Badge>}
+        {resolved && (
+          <Badge tone={issue.decision === 'overridden' ? 'warn' : 'ok'} dot>
+            {issue.decision}
+          </Badge>
+        )}
+      </div>
+      <div className="mt-1 truncate text-[11px] text-ink-400">
+        {issue.element === 'visual' ? `Visual · ${issue.elementRef}` : 'Copy'} · {issue.citation}
+      </div>
+    </button>
+  )
+}
+
+/** Reviewer-raised finding form (right panel). */
+function AddFindingForm({ onAdd }: { onAdd: (issue: ComplianceIssue) => void }) {
+  const [title, setTitle] = useState('')
+  const [severity, setSeverity] = useState<RuleSeverity>('Major')
+  const [element, setElement] = useState<IssueElement>('copy')
+  const [snippet, setSnippet] = useState('')
+  const [rationale, setRationale] = useState('')
+  const [fix, setFix] = useState('')
+  const fieldCls =
+    'w-full rounded-lg border border-ink-200 bg-white px-3 py-2 text-sm focus:border-straive-400 focus:outline-none focus:ring-2 focus:ring-straive-500/20'
+  const valid = title.trim() && rationale.trim()
+  return (
+    <div className="space-y-3">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="text-xs font-medium text-ink-600">
+          Severity
+          <select
+            value={severity}
+            onChange={(e) => setSeverity(e.target.value as RuleSeverity)}
+            className={cn(fieldCls, 'mt-1 h-9 py-0')}
+          >
+            <option>Critical</option>
+            <option>Major</option>
+            <option>Minor</option>
+          </select>
+        </label>
+        <label className="text-xs font-medium text-ink-600">
+          Element
+          <select
+            value={element}
+            onChange={(e) => setElement(e.target.value as IssueElement)}
+            className={cn(fieldCls, 'mt-1 h-9 py-0')}
+          >
+            <option value="copy">Copy</option>
+            <option value="visual">Visual</option>
+          </select>
+        </label>
+      </div>
+      <input className={fieldCls} placeholder="Finding title" value={title} onChange={(e) => setTitle(e.target.value)} />
+      <input
+        className={fieldCls}
+        placeholder="Flagged snippet / where (optional)"
+        value={snippet}
+        onChange={(e) => setSnippet(e.target.value)}
+      />
+      <textarea
+        className={cn(fieldCls, 'resize-y')}
+        rows={2}
+        placeholder="Why is this a concern?"
+        value={rationale}
+        onChange={(e) => setRationale(e.target.value)}
+      />
+      <textarea
+        className={cn(fieldCls, 'resize-y')}
+        rows={2}
+        placeholder="Suggested fix (optional)"
+        value={fix}
+        onChange={(e) => setFix(e.target.value)}
+      />
+      <Button
+        variant="primary"
+        icon={<IconCheck size={15} />}
+        disabled={!valid}
+        onClick={() =>
+          onAdd({
+            id: uid('iss'),
+            ruleId: 'manual',
+            citation: 'Reviewer judgment',
+            category: 'Reviewer-raised',
+            title: title.trim(),
+            severity,
+            element,
+            snippet: snippet.trim() || '(reviewer note)',
+            rationale: rationale.trim(),
+            suggestedRewrite: fix.trim() || 'Revise per the reviewer note.',
+            decision: 'open',
+            manual: true,
+          })
+        }
+      >
+        Add finding
+      </Button>
+    </div>
+  )
+}
+
+/** Net-impression prompts over the rendered post; a concern promotes to a finding. */
+function NetImpressionPanel({
+  draft,
+  visuals,
+  onFlag,
+}: {
+  draft: DraftVariant
+  visuals: VisualAsset[]
+  onFlag: (issue: ComplianceIssue) => void
+}) {
+  const checks = useMemo(() => netImpressionChecks(draft, visuals), [draft, visuals])
+  const [done, setDone] = useState<Record<string, 'pass' | 'flagged'>>({})
+  return (
+    <div className="rounded-xl border border-ink-200 bg-ink-50/40 p-3">
+      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+        Net-impression checks
+      </div>
+      <p className="mb-2 text-xs text-ink-500">
+        Judge the rendered post as a whole — things the rule engine can't see. Flag a concern to add it as a finding.
+      </p>
+      <ul className="space-y-1.5">
+        {checks.map((c) => {
+          const st = done[c.id]
+          return (
+            <li
+              key={c.id}
+              className="flex items-start justify-between gap-3 rounded-lg bg-white px-3 py-2 text-sm"
+            >
+              <span className="flex-1 text-ink-700">{c.prompt}</span>
+              {st ? (
+                <Badge tone={st === 'pass' ? 'ok' : 'warn'} dot>
+                  {st === 'pass' ? 'Pass' : 'Flagged'}
+                </Badge>
+              ) : (
+                <span className="flex shrink-0 gap-1.5">
+                  <Button size="sm" variant="ghost" onClick={() => setDone((d) => ({ ...d, [c.id]: 'pass' }))}>
+                    Pass
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => {
+                      onFlag({
+                        id: uid('iss'),
+                        ruleId: 'manual',
+                        citation: 'Dodd-Frank §1031/§1036 (UDAAP) — net impression',
+                        category: 'Net impression (reviewer)',
+                        title: 'Net-impression concern',
+                        severity: 'Major',
+                        element: 'copy',
+                        snippet: c.prompt,
+                        rationale: `Reviewer flagged on the rendered post: ${c.prompt}`,
+                        suggestedRewrite: 'Adjust copy/visual so the overall impression is accurate and balanced.',
+                        decision: 'open',
+                        manual: true,
+                      })
+                      setDone((d) => ({ ...d, [c.id]: 'flagged' }))
+                    }}
+                  >
+                    Flag
+                  </Button>
+                </span>
+              )}
+            </li>
+          )
+        })}
+      </ul>
     </div>
   )
 }
@@ -472,6 +851,7 @@ function IssueCard({
         <Badge tone={severityTone(issue.severity)}>{issue.severity}</Badge>
         <span className="text-sm font-semibold text-ink-900">{issue.title}</span>
         <Badge tone="neutral">{issue.element === 'visual' ? `Visual: ${issue.elementRef}` : 'Copy'}</Badge>
+        {issue.manual && <Badge tone="info">Manual</Badge>}
         {resolved && (
           <Badge tone={issue.decision === 'overridden' ? 'warn' : 'ok'} dot>
             {issue.decision}
@@ -652,6 +1032,7 @@ function SignOffPanel({
   compliance,
   score,
   openCriticals,
+  stale,
   reviewer,
   setReviewer,
   onSign,
@@ -659,6 +1040,7 @@ function SignOffPanel({
   compliance: ComplianceState
   score: number
   openCriticals: number
+  stale: boolean
   reviewer: string
   setReviewer: (s: string) => void
   onSign: (so: SignOff) => void
@@ -704,6 +1086,13 @@ function SignOffPanel({
           </div>
         )}
 
+        {stale && (
+          <div className="flex items-center gap-2 rounded-lg border border-warn/30 bg-warn/5 px-3 py-2 text-sm text-warn">
+            <IconAlert size={15} />
+            Content changed since this review — re-run the gate before signing off.
+          </div>
+        )}
+
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="text-xs font-medium text-ink-600">
             Reviewer name
@@ -738,7 +1127,7 @@ function SignOffPanel({
           <Button
             variant="primary"
             icon={<IconShield size={15} />}
-            disabled={!reviewer.trim() || (decision === 'approved' && openCriticals > 0)}
+            disabled={!reviewer.trim() || stale || (decision === 'approved' && openCriticals > 0)}
             onClick={() =>
               onSign({
                 reviewer: reviewer.trim(),

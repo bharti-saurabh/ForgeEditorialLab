@@ -13,6 +13,7 @@ import type {
   BriefInput,
   BrandProfile,
   ChannelKey,
+  ComplianceIssue,
   ComplianceState,
   ContentBrief,
   DraftVariant,
@@ -33,6 +34,8 @@ import type {
 } from '@/types'
 import { channelForFormat } from '@/lib/channels'
 import { findTopic } from '@/lib/topics'
+import { buildCleanVersion } from '@/lib/complianceEngine'
+import { brandMatchScore } from '@/lib/brand/grounding'
 import { DEFAULT_SETTINGS } from '@/seed/defaults'
 import { SEED_BRAND_ASSETS } from '@/seed/brandAssets'
 import { SEED_BRAND_PROFILE } from '@/seed/brandProfile'
@@ -123,7 +126,12 @@ interface AppState {
     actor: string,
     extra?: { editText?: string; overrideReason?: string },
   ) => void
+  /** reviewer raises a manual finding (or promotes a net-impression concern) */
+  addComplianceIssue: (issue: ComplianceIssue, actor: string) => void
   applyCleanVersion: (actor: string) => void
+  /** write the compliance clean version back onto the chosen draft (reconnects
+   *  the gate to Step 2) and re-stamp the reviewed signature */
+  applyCleanToDraft: (actor: string) => void
   signCompliance: (signoff: SignOff) => void
   setPublish: (pkg: PublishPackage | null) => void
   setPersona: (state: PersonaLabState | null) => void
@@ -456,6 +464,30 @@ export const useAppStore = create<AppState>()(
             },
           }
         }),
+      addComplianceIssue: (issue, actor) =>
+        set((s) => {
+          const c = s.pipeline.compliance
+          if (!c) return {}
+          return {
+            pipeline: {
+              ...s.pipeline,
+              compliance: {
+                ...c,
+                issues: [...c.issues, { ...issue, manual: true }],
+                audit: [
+                  ...c.audit,
+                  {
+                    id: uid('aud'),
+                    ts: Date.now(),
+                    actor,
+                    action: 'analyzed',
+                    detail: `Manual finding added: [${issue.severity}] ${issue.title}`,
+                  },
+                ],
+              },
+            },
+          }
+        }),
       applyCleanVersion: (actor) =>
         set((s) => {
           const c = s.pipeline.compliance
@@ -474,6 +506,47 @@ export const useAppStore = create<AppState>()(
                     actor,
                     action: 'clean-applied',
                     detail: 'Applied suggested clean version (rewrites + disclosures).',
+                  },
+                ],
+              },
+            },
+          }
+        }),
+      applyCleanToDraft: (actor) =>
+        set((s) => {
+          const c = s.pipeline.compliance
+          const draft = s.pipeline.drafts.find((d) => d.id === s.pipeline.chosenDraftId)
+          if (!c || !draft) return {}
+          // Write the clean version (accepted rewrites + edits + appended
+          // disclosures) back onto the chosen draft so Step 2 and the gate agree.
+          const cleanMd = buildCleanVersion(draft, c)
+          const nl = cleanMd.indexOf('\n')
+          const title = cleanMd.slice(0, nl).replace(/^#\s+/, '').trim() || draft.title
+          const body = cleanMd.slice(nl + 1).trim()
+          const brandMatch = brandMatchScore(`${title}\n${body}`, s.brandProfile)
+          const wordCount = body.split(/\s+/).filter(Boolean).length
+          const drafts = s.pipeline.drafts.map((d) =>
+            d.id === draft.id ? { ...d, title, body, brandMatch, wordCount, edited: true } : d,
+          )
+          return {
+            pipeline: {
+              ...s.pipeline,
+              drafts,
+              compliance: {
+                ...c,
+                cleanApplied: true,
+                // Intentionally NOT re-stamping reviewedSig: writing fixes back
+                // changes the draft, so the review is now stale and must re-run
+                // before sign-off — the copy and the gate can't silently diverge.
+                checklist: c.checklist.map((chk) => ({ ...chk, present: true })),
+                audit: [
+                  ...c.audit,
+                  {
+                    id: uid('aud'),
+                    ts: Date.now(),
+                    actor,
+                    action: 'clean-applied',
+                    detail: 'Applied clean version to the chosen draft (rewrites + disclosures written back).',
                   },
                 ],
               },

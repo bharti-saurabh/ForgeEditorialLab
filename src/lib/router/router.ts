@@ -191,6 +191,8 @@ export interface RunImageOpts {
   /** seeded image url (data URL) for demo mode / live failure */
   demo: () => string
   size?: string
+  /** override the role's configured image model (e.g. the Step 3 variant bake-off) */
+  modelId?: string
 }
 
 export interface RunImageResult {
@@ -202,7 +204,7 @@ export interface RunImageResult {
 export async function runImage(opts: RunImageOpts): Promise<RunImageResult> {
   const s = settings()
   const role: ModelRole = 'image'
-  const modelId = modelForRole(role, s.models)
+  const modelId = opts.modelId?.trim() || modelForRole(role, s.models)
   const reason = opts.reason ?? ROLE_META[role].defaultReason
   const modelLabel = friendlyModel(modelId)
   const baseUrl = baseUrlForRole(role, s)

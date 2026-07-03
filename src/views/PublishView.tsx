@@ -13,7 +13,7 @@ import { findTopic } from '@/lib/topics'
 import { channelSpec } from '@/lib/channels'
 import { SEED_RULEBOOK } from '@/seed/rulebook'
 import { disclosuresForTopic } from '@/lib/compliance'
-import { buildCleanVersion, currentScore } from '@/lib/complianceEngine'
+import { buildCleanVersion, currentScore, contentSignature } from '@/lib/complianceEngine'
 import { CHANNELS, channelMeta, recheckChannel, type ChannelMeta } from '@/lib/publish'
 import {
   PUBLISH_SYSTEM,
@@ -56,8 +56,14 @@ export function PublishView() {
   const [running, setRunning] = useState(false)
   const [busyChannel, setBusyChannel] = useState<ChannelKey | null>(null)
 
+  // Sign-off is only valid for the content it was recorded against — an edit
+  // after sign-off makes it stale and blocks publish until the gate re-runs.
+  const stale =
+    !!compliance?.reviewedSig &&
+    !!draft &&
+    contentSignature(draft, pipeline.visuals) !== compliance.reviewedSig
   const signed =
-    !!compliance?.signoff && compliance.signoff.decision !== 'rejected'
+    !!compliance?.signoff && compliance.signoff.decision !== 'rejected' && !stale
 
   // ── gates ──────────────────────────────────────────────────────────────
   if (!topic || !draft) {
@@ -85,11 +91,13 @@ export function PublishView() {
         <Disclaimer kind="legal" className="mb-4" />
         <EmptyState
           icon={<IconShield size={22} />}
-          title="Compliance sign-off required"
+          title={stale ? 'Sign-off is stale' : 'Compliance sign-off required'}
           description={
-            compliance?.signoff?.decision === 'rejected'
-              ? 'This piece was rejected at the compliance gate. Send it back to Step 2 to revise before packaging.'
-              : 'A named reviewer must approve the piece at the compliance gate before it can be packaged for publish.'
+            stale
+              ? 'The copy or visuals changed after sign-off. Re-run the compliance gate and re-approve before packaging.'
+              : compliance?.signoff?.decision === 'rejected'
+                ? 'This piece was rejected at the compliance gate. Send it back to Step 2 to revise before packaging.'
+                : 'A named reviewer must approve the piece at the compliance gate before it can be packaged for publish.'
           }
           action={
             <Button variant="primary" icon={<IconShield size={15} />} onClick={() => setView('step-4')}>
