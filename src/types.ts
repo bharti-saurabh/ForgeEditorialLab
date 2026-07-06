@@ -500,6 +500,33 @@ export interface ChannelRecheck {
   notes: string[]
 }
 
+/** Human override that clears a channel's re-check for export (Step 5 gate). */
+export interface ChannelResolution {
+  overridden: boolean
+  by: string
+  note: string
+  at: number
+}
+
+/** Structured responsive-search-ad fields (SEM) with per-field limits. */
+export interface SemAsset {
+  headlines: string[]
+  descriptions: string[]
+}
+
+export type HandoffStatus = 'draft' | 'scheduled' | 'published'
+
+/** Per-channel scheduling / ownership / tracking metadata for the CMS handoff. */
+export interface ChannelHandoff {
+  status: HandoffStatus
+  /** free-text / ISO date the channel is slated to go live */
+  scheduledFor: string
+  owner: string
+  utmSource: string
+  utmMedium: string
+  utmCampaign: string
+}
+
 /** One channel-adapted rendering of the approved copy. */
 export interface ChannelAdaptation {
   channel: ChannelKey
@@ -514,6 +541,19 @@ export interface ChannelAdaptation {
   mode: CallMode
   recheck: ChannelRecheck
   generatedAt: number
+  /** true for the surface the piece was authored & signed off FOR — this entry
+   *  is the approved draft itself, not a re-adaptation */
+  isPrimary?: boolean
+  /** set once an editor has hand-edited this adaptation */
+  edited?: boolean
+  /** human override clearing a 'review' re-check for export */
+  resolution?: ChannelResolution | null
+  /** structured SEM fields (channel === 'sem') */
+  sem?: SemAsset | null
+  /** the visual assigned to this channel (image surfaces) */
+  visualId?: string | null
+  /** schedule / owner / UTM handoff metadata */
+  handoff?: ChannelHandoff
 }
 
 export interface PublishPackage {

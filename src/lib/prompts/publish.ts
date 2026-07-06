@@ -14,6 +14,10 @@ export interface AdaptationDraft {
   body: string
   cta: string
   hashtags: string[]
+  /** structured SEM fields (channel === 'sem'); ≤30 char each */
+  headlines?: string[]
+  /** structured SEM fields (channel === 'sem'); ≤90 char each */
+  descriptions?: string[]
 }
 
 const SCHEMA = `Return ONLY a JSON object (no prose, no fences):
@@ -121,18 +125,22 @@ export function demoAdaptation(
     case 'sem': {
       const clip = (s: string, n: number) => (s.length <= n ? s : s.slice(0, n - 1).trimEnd() + '…')
       const subject = topic.title.split(':')[0].split(' (')[0]
+      const headlines = [
+        clip(subject, 30),
+        clip(`${profile.brandName} — No Surprises`, 30),
+        clip('Transparent Rates & Fees', 30),
+      ]
+      const descriptions = [
+        clip(hook, 90),
+        clip(`See how ${profile.brandName} keeps [APR], fees & terms clear. See terms.`, 90),
+      ]
       return {
-        headline: clip(subject, 30),
-        body:
-          `Headlines:\n` +
-          `- ${clip(subject, 30)}\n` +
-          `- ${clip(`${profile.brandName} — No Surprises`, 30)}\n` +
-          `- ${clip('Transparent Rates & Fees', 30)}\n\n` +
-          `Descriptions:\n` +
-          `- ${clip(hook, 90)}\n` +
-          `- ${clip(`See how ${profile.brandName} keeps [APR], fees & terms clear. See terms.`, 90)}`,
+        headline: headlines[0],
+        body: composeSemBody(headlines, descriptions),
         cta,
         hashtags: [],
+        headlines,
+        descriptions,
       }
     }
     case 'paid-social':
@@ -149,4 +157,32 @@ export function demoAdaptation(
 /** Compose the JSON fields into a single re-checkable text blob. */
 export function adaptationText(a: AdaptationDraft): string {
   return [a.headline, a.body, a.cta, a.hashtags.join(' ')].filter(Boolean).join('\n')
+}
+
+/** Render structured SEM fields into the "Headlines:/Descriptions:" list body. */
+export function composeSemBody(headlines: string[], descriptions: string[]): string {
+  return (
+    `Headlines:\n` +
+    headlines.map((h) => `- ${h}`).join('\n') +
+    `\n\nDescriptions:\n` +
+    descriptions.map((d) => `- ${d}`).join('\n')
+  )
+}
+
+/** Parse a "Headlines:/Descriptions:" body back into structured SEM fields. */
+export function parseSemBody(body: string): { headlines: string[]; descriptions: string[] } {
+  const lines = body.split('\n')
+  const headlines: string[] = []
+  const descriptions: string[] = []
+  let bucket: 'h' | 'd' | null = null
+  for (const raw of lines) {
+    const line = raw.trim()
+    if (/^headlines?:/i.test(line)) { bucket = 'h'; continue }
+    if (/^descriptions?:/i.test(line)) { bucket = 'd'; continue }
+    const item = line.replace(/^[-•*]\s*/, '').trim()
+    if (!item) continue
+    if (bucket === 'h') headlines.push(item)
+    else if (bucket === 'd') descriptions.push(item)
+  }
+  return { headlines, descriptions }
 }

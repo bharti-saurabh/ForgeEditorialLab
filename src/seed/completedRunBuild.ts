@@ -30,8 +30,9 @@ import { suggestedSlots, buildImagePrompt, demoVisualText, assessBrandSafety } f
 import { buildBrandMockSvg } from '@/lib/visualMock'
 import { analyzeContent, computeScore, buildCleanVersion } from '@/lib/complianceEngine'
 import { demoAssessment } from '@/lib/prompts/compliance'
-import { CHANNELS, recheckChannel } from '@/lib/publish'
-import { demoAdaptation, adaptationText } from '@/lib/prompts/publish'
+import { CHANNELS, recheckChannel, defaultHandoff } from '@/lib/publish'
+import { isImageChannel } from '@/lib/channels'
+import { demoAdaptation, composeSemBody, type AdaptationDraft } from '@/lib/prompts/publish'
 import {
   defaultPanel,
   simulateSurvey,
@@ -175,9 +176,24 @@ export function buildCompletedPipeline(): PipelineState {
 
   // ── Publish package ────────────────────────────────────────────────────────
   const masterCopy = buildCleanVersion(draft, compliance)
+  const primaryKey = 'blog' as const
   const channels: ChannelAdaptation[] = CHANNELS.map((meta) => {
-    const a = demoAdaptation(profile, topic, meta.key, masterCopy, disclosures)
-    const recheck = recheckChannel(adaptationText(a), disclosures, SEED_RULEBOOK, meta)
+    const isPrimary = meta.key === primaryKey
+    // The primary channel's entry IS the approved draft, not a re-adaptation.
+    const a: AdaptationDraft = isPrimary
+      ? { headline: draft.title, body: masterCopy, cta: profile.messaging.ctas[0] ?? 'Learn more', hashtags: [] }
+      : demoAdaptation(profile, topic, meta.key, masterCopy, disclosures)
+    const sem =
+      meta.key === 'sem'
+        ? { headlines: a.headlines ?? [], descriptions: a.descriptions ?? [] }
+        : null
+    const bodyText = sem ? composeSemBody(sem.headlines, sem.descriptions) : a.body
+    const recheck = recheckChannel(
+      [a.headline, bodyText, a.cta, a.hashtags.join(' ')].filter(Boolean).join('\n'),
+      disclosures,
+      SEED_RULEBOOK,
+      meta,
+    )
     return {
       channel: meta.key,
       label: meta.label,
@@ -185,12 +201,20 @@ export function buildCompletedPipeline(): PipelineState {
       body: a.body,
       cta: a.cta,
       hashtags: a.hashtags,
-      charCount: a.body.length,
+      charCount: sem
+        ? Math.max(0, ...sem.headlines.map((h) => h.length), ...sem.descriptions.map((d) => d.length))
+        : a.body.length,
       charLimit: meta.charLimit,
-      modelLabel: friendlyModel(textModel),
+      modelLabel: isPrimary ? 'Approved draft' : friendlyModel(textModel),
       mode: 'demo',
       recheck,
       generatedAt: now - 20 * 60 * 1000,
+      isPrimary,
+      edited: false,
+      resolution: null,
+      sem,
+      visualId: isImageChannel(meta.key) ? visual.id : null,
+      handoff: defaultHandoff(meta.key, topic),
     }
   })
   const publish: PublishPackage = {

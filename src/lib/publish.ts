@@ -4,10 +4,12 @@
 // drop a disclosure or reintroduce a flagged phrase.
 
 import type {
+  ChannelHandoff,
   ChannelKey,
   ChannelRecheck,
   ComplianceIssue,
   RuleBook,
+  TopicOpportunity,
 } from '@/types'
 import { scanText } from '@/lib/complianceEngine'
 
@@ -67,6 +69,50 @@ export const CHANNELS: ChannelMeta[] = [
 
 export function channelMeta(key: ChannelKey): ChannelMeta {
   return CHANNELS.find((c) => c.key === key) ?? CHANNELS[0]
+}
+
+/** Google Ads per-field limits for the structured responsive search ad. */
+export const SEM_LIMITS = { headline: 30, description: 90, headlines: 3, descriptions: 2 } as const
+
+/** A sensible default UTM/handoff for a channel, so the CMS handoff isn't blank. */
+export function defaultHandoff(channel: ChannelKey, topic: TopicOpportunity): ChannelHandoff {
+  const source: Record<ChannelKey, string> = {
+    blog: 'website',
+    email: 'newsletter',
+    'paid-social': 'meta',
+    sem: 'google',
+    linkedin: 'linkedin',
+  }
+  const medium: Record<ChannelKey, string> = {
+    blog: 'referral',
+    email: 'email',
+    'paid-social': 'paid_social',
+    sem: 'cpc',
+    linkedin: 'social',
+  }
+  const campaign = topic.title
+    .toLowerCase()
+    .split(':')[0]
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+  return {
+    status: 'draft',
+    scheduledFor: '',
+    owner: '',
+    utmSource: source[channel] ?? 'website',
+    utmMedium: medium[channel] ?? 'referral',
+    utmCampaign: campaign || 'forge-campaign',
+  }
+}
+
+/** UTM query string (`?utm_source=…`) from a handoff; empty when nothing is set. */
+export function utmQuery(h: ChannelHandoff): string {
+  const parts: string[] = []
+  if (h.utmSource) parts.push(`utm_source=${encodeURIComponent(h.utmSource)}`)
+  if (h.utmMedium) parts.push(`utm_medium=${encodeURIComponent(h.utmMedium)}`)
+  if (h.utmCampaign) parts.push(`utm_campaign=${encodeURIComponent(h.utmCampaign)}`)
+  return parts.length ? `?${parts.join('&')}` : ''
 }
 
 /** Distinctive keyphrase test — does the adapted copy still carry a disclosure? */
