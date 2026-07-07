@@ -471,6 +471,23 @@ committed/deployed.**
 
 ---
 
+## 15. Navigation redesign (BUILT)
+
+Foundation was demoted from a co-equal top-level area tab to a **corner dropdown**,
+and the **Editorial Lab pipeline is now the primary center nav**.
+- `src/views/AppShell.tsx` rewritten: removed the `UnifiedNav`/`TOP_NAV`/area-tab
+  model. **`PipelineNav`** (center) = the 6 steps as a numbered stepper (active glows
+  orange w/ label; done = green check derived from real pipeline artifacts, not just
+  `currentStep`; upcoming dim; thin connectors). **`FoundationMenu`** = a right-cluster
+  "Foundation" button (grouped with Model Router + Settings) opening a dropdown of
+  Overview / Brand Memory / Brand Profile (click-away + Esc close; highlights active).
+- `nav.ts` `FOUNDATION`/`PIPELINE` and `StepRail`'s `PIPELINE_STEPS` are unchanged and
+  still the single source of truth. (The `StepRail` *component* is now unused but kept.)
+
+**Build:** clean. Not yet committed/deployed.
+
+---
+
 ## 11. Working style / preferences observed
 - User iterates fast, says "go"/"yes" to proceed; likes: critique-first, then a
   **phased plan**, then build phase-by-phase with a build check each time.
