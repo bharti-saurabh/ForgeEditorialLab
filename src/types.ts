@@ -569,44 +569,9 @@ export interface PublishPackage {
   heroVisualId: string | null
 }
 
-// ── Persona Lab (Step 6) ─────────────────────────────────────────────────
+// ── Persona Lab (Step 6) — live, agentic focus group ─────────────────────────
 
 export type PersonaSentiment = 'positive' | 'mixed' | 'negative'
-
-/** One simulated reaction from a segment during the AI focus group. */
-export interface FocusComment {
-  segmentId: string
-  segmentName: string
-  lens: SegmentLens
-  sentiment: PersonaSentiment
-  quote: string
-  objection: string
-}
-
-/** Per-segment survey responses (0-100 synthetic Likert scores). */
-export interface SurveyRow {
-  segmentId: string
-  segmentName: string
-  lens: SegmentLens
-  clarity: number
-  trust: number
-  appeal: number
-  intent: number
-}
-
-/** Aggregate for one survey metric across the panel. */
-export interface SurveyMetric {
-  key: 'clarity' | 'trust' | 'appeal' | 'intent'
-  label: string
-  average: number
-}
-
-export interface PersonaRecommendation {
-  verdict: 'ship' | 'revise' | 'ab-test'
-  headline: string
-  rationale: string
-  abPlan: string[]
-}
 
 /** A fairness-guardrail event (blocked or allowed custom segment). */
 export interface FairnessFlag {
@@ -617,16 +582,119 @@ export interface FairnessFlag {
   reason: string
 }
 
+/** User setup: which behavioral segments to seat + how many participants. */
+export interface FocusGroupConfig {
+  segmentIds: string[]
+  participantCount: number
+}
+
+/**
+ * A generated individual focus-group participant. Believable and human, but
+ * every attribute is BEHAVIORAL / needs-based — never a protected class or proxy
+ * (Reg B / ECOA). Names are illustrative flavor, not a demographic basis.
+ */
+export interface Participant {
+  id: string
+  name: string
+  /** the behavioral segment this participant represents */
+  segmentId: string
+  segmentName: string
+  lens: SegmentLens
+  /** one-line behavioral archetype, e.g. "Cautious first-time cardholder" */
+  archetype: string
+  personality: string[]
+  likes: string[]
+  dislikes: string[]
+  interests: string[]
+  goals: string[]
+  frustrations: string[]
+  /** short first-person bio */
+  bio: string
+  /** how they speak, e.g. "blunt, asks pointed questions" */
+  voice: string
+  /** deterministic avatar seed: 2 initials + a palette index */
+  avatarSeed: string
+}
+
+/** One item on the moderator's agenda. */
+export interface AgendaItem {
+  id: string
+  title: string
+  /** the moderator's question posed to the group */
+  prompt: string
+}
+
+export type TurnKind = 'moderator' | 'participant'
+
+/** One line of the live discussion. */
+export interface DiscussionTurn {
+  id: string
+  agendaItemId: string
+  kind: TurnKind
+  /** participant id when kind === 'participant', else null */
+  speakerId: string | null
+  speakerName: string
+  text: string
+  /** participant turns only */
+  sentiment?: PersonaSentiment
+  ts: number
+}
+
+/** A recurring theme surfaced across the discussion. */
+export interface ThemeStat {
+  theme: string
+  count: number
+  sentiment: PersonaSentiment
+}
+
+export interface FocusGroupStats {
+  sentiment: { positive: number; mixed: number; negative: number }
+  themes: ThemeStat[]
+  standoutQuotes: { speakerName: string; text: string; sentiment: PersonaSentiment }[]
+  /** qualitative overall read */
+  resonance: 'strong' | 'mixed' | 'weak'
+}
+
+/** A concrete, selectable content fix produced from the discussion. */
+export interface ContentRecommendation {
+  id: string
+  title: string
+  detail: string
+  rationale: string
+  /** the theme / objection it addresses */
+  addresses: string
+}
+
+/** Revised copy drafted from the selected recommendations (previewed inline). */
+export interface RevisedDraft {
+  title: string
+  body: string
+  appliedRecIds: string[]
+  modelLabel: string
+  mode: CallMode
+}
+
+export type FocusGroupStage = 'personas' | 'discussion' | 'complete'
+
 export interface PersonaLabState {
   runAt: number
-  panelSegmentIds: string[]
-  comments: FocusComment[]
-  synthesis: string
-  synthesisModelLabel: string
-  synthesisMode: CallMode
-  survey: SurveyRow[]
-  metrics: SurveyMetric[]
-  recommendation: PersonaRecommendation
+  /** the surface the piece was tested as */
+  channel: ChannelKey
+  /** how far the focus group has progressed */
+  stage: FocusGroupStage
+  config: FocusGroupConfig
+  participants: Participant[]
+  agenda: AgendaItem[]
+  transcript: DiscussionTurn[]
+  summary: string
+  stats: FocusGroupStats | null
+  recommendations: ContentRecommendation[]
+  /** ids of the recommendations the user has selected to apply */
+  selectedRecIds: string[]
+  /** revised copy drafted from the selected recommendations */
+  revisedDraft: RevisedDraft | null
+  moderatorModelLabel: string
+  mode: CallMode
   /** standing fairness statement + any guardrail events */
   fairnessNote: string
   fairnessFlags: FairnessFlag[]
@@ -662,6 +730,10 @@ export interface PipelineState {
   persona: PersonaLabState | null
   /** revision-loop counter — bumped when revisions are sent back to Step 2 */
   revision: number
+  /** the ask carried back to Step 2 when a stage sends the piece for revision
+   *  (e.g. Persona Lab's weak metric + objections); shown as a banner, cleared
+   *  once a new draft is generated */
+  revisionNote: string
 }
 
 // ── Persona Lab segments (Increment 4; seeded now) ──────────────────────────

@@ -46,6 +46,8 @@ import {
   IconRoute,
   IconGear,
   IconAlert,
+  IconRefresh,
+  IconX,
 } from '@/components/icons'
 import { cn } from '@/lib/cn'
 
@@ -66,6 +68,7 @@ export function BriefDraftView() {
   const updateDraft = useAppStore((s) => s.updateDraft)
   const removeDraft = useAppStore((s) => s.removeDraft)
   const chooseDraft = useAppStore((s) => s.chooseDraft)
+  const clearRevisionNote = useAppStore((s) => s.clearRevisionNote)
 
   const topic = useMemo(
     () => findTopic(pipeline.selectedTopicId, pipeline.userTopics),
@@ -324,6 +327,24 @@ export function BriefDraftView() {
       </Card>
 
       <Disclaimer kind="legal" className="mb-5" />
+
+      {/* revision ask carried back from a later stage (e.g. Persona Lab) */}
+      {pipeline.revisionNote && (
+        <div className="mb-5 flex items-start gap-3 rounded-xl border border-warn/30 bg-warn/5 px-4 py-3">
+          <IconRefresh size={16} className="mt-0.5 shrink-0 text-warn" />
+          <div className="flex-1">
+            <div className="text-sm font-semibold text-ink-900">Revision requested (round {pipeline.revision})</div>
+            <p className="mt-0.5 text-sm text-ink-600">{pipeline.revisionNote}</p>
+          </div>
+          <button
+            className="shrink-0 rounded-md p-1 text-ink-400 hover:bg-ink-100 hover:text-ink-700"
+            onClick={clearRevisionNote}
+            aria-label="Dismiss"
+          >
+            <IconX size={15} />
+          </button>
+        </div>
+      )}
 
       {/* publish channel (narrow left) + content brief (wide right) — aligned
           with the bake-off / finalize columns below */}

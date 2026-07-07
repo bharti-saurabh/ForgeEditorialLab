@@ -9,12 +9,11 @@ import type {
   ComplianceIssue,
   ComplianceState,
   ContentBrief,
+  DiscussionTurn,
   DraftVariant,
-  FocusComment,
   PersonaLabState,
   PipelineState,
   PublishPackage,
-  SurveyRow,
   VisualAsset,
 } from '@/types'
 import { SEED_BRAND_PROFILE } from '@/seed/brandProfile'
@@ -33,14 +32,16 @@ import { demoAssessment } from '@/lib/prompts/compliance'
 import { CHANNELS, recheckChannel, defaultHandoff } from '@/lib/publish'
 import { isImageChannel } from '@/lib/channels'
 import { demoAdaptation, composeSemBody, type AdaptationDraft } from '@/lib/prompts/publish'
+import { defaultPanel, FAIRNESS_NOTE } from '@/lib/persona'
 import {
-  defaultPanel,
-  simulateSurvey,
-  simulateComment,
-  aggregateMetrics,
-  buildRecommendation,
-  FAIRNESS_NOTE,
-} from '@/lib/persona'
+  demoParticipants,
+  buildAgenda,
+  moderatorOpening,
+  demoDiscussionTurns,
+  computeStats,
+  demoSummary,
+  demoRecommendations,
+} from '@/lib/focusGroup'
 import { uid } from '@/lib/format'
 
 function parseDraft(md: string): { title: string; body: string } {
@@ -228,24 +229,54 @@ export function buildCompletedPipeline(): PipelineState {
     heroVisualId: visual.id,
   }
 
-  // ── Persona Lab ─────────────────────────────────────────────────────────────
-  const panelIds = defaultPanel(topic, SEED_SEGMENTS)
-  const panel = SEED_SEGMENTS.filter((s) => panelIds.includes(s.id))
-  const inputs = { brandMatch: draft.brandMatch.score, complianceScore: score }
-  const survey: SurveyRow[] = panel.map((s) => simulateSurvey(s, topic, inputs))
-  const comments: FocusComment[] = panel.map((s, i) => simulateComment(s, topic, survey[i]))
-  const metrics = aggregateMetrics(survey)
-  const recommendation = buildRecommendation(metrics, survey, comments)
+  // ── Persona Lab (live focus group) ───────────────────────────────────────────
+  const personaChannel = 'blog' as const
+  const personaSeed = 424242 // fixed so the example run is stable
+  const segmentIds = defaultPanel(topic, SEED_SEGMENTS)
+  const segments = SEED_SEGMENTS.filter((s) => segmentIds.includes(s.id))
+  const participants = demoParticipants(segments, 4, personaSeed)
+  const agenda = buildAgenda(topic, personaChannel)
+  const transcript: DiscussionTurn[] = [
+    {
+      id: 'turn_open',
+      agendaItemId: 'open',
+      kind: 'moderator',
+      speakerId: null,
+      speakerName: 'Moderator',
+      text: moderatorOpening(topic, personaChannel, participants.length),
+      ts: now - 12 * 60 * 1000,
+    },
+  ]
+  for (const item of agenda) {
+    transcript.push({
+      id: `turn_mod_${item.id}`,
+      agendaItemId: item.id,
+      kind: 'moderator',
+      speakerId: null,
+      speakerName: 'Moderator',
+      text: item.prompt,
+      ts: now - 11 * 60 * 1000,
+    })
+    for (const t of demoDiscussionTurns(item, participants, topic, personaSeed)) {
+      transcript.push({ ...t, ts: now - 11 * 60 * 1000 })
+    }
+  }
+  const stats = computeStats(transcript, participants)
   const persona: PersonaLabState = {
     runAt: now - 10 * 60 * 1000,
-    panelSegmentIds: panelIds,
-    comments,
-    synthesis: buildExampleSynthesis(topic.title, metrics, recommendation),
-    synthesisModelLabel: friendlyModel(textModel),
-    synthesisMode: 'demo',
-    survey,
-    metrics,
-    recommendation,
+    channel: personaChannel,
+    stage: 'complete',
+    config: { segmentIds, participantCount: participants.length },
+    participants,
+    agenda,
+    transcript,
+    summary: demoSummary(topic, stats),
+    stats,
+    recommendations: demoRecommendations(topic, stats),
+    selectedRecIds: [],
+    revisedDraft: null,
+    moderatorModelLabel: friendlyModel(textModel),
+    mode: 'demo',
     fairnessNote: FAIRNESS_NOTE,
     fairnessFlags: [],
   }
@@ -270,19 +301,6 @@ export function buildCompletedPipeline(): PipelineState {
     publish,
     persona,
     revision: 1,
+    revisionNote: '',
   }
-}
-
-function buildExampleSynthesis(
-  topicTitle: string,
-  metrics: PersonaLabState['metrics'],
-  rec: PersonaLabState['recommendation'],
-): string {
-  const strongest = [...metrics].sort((a, b) => b.average - a.average)[0]
-  const weakest = [...metrics].sort((a, b) => a.average - b.average)[0]
-  return (
-    `Across the panel, "${topicTitle.split(':')[0].toLowerCase()}" reads as ${strongest.label.toLowerCase()}-forward (${strongest.average}/100). Debt-Conscious Optimizers and Credit Builders responded most warmly to the straight, no-hype explanation, and the transparent "no surprises" framing carried real weight.\n\n` +
-    `The drag is ${weakest.label.toLowerCase()} (${weakest.average}/100): more skeptical segments wanted concrete numbers before committing. That is an optimization opportunity, not a blocker, and it points cleanly at the A/B test.\n\n` +
-    `Recommendation: ${rec.headline} ${rec.rationale}`
-  )
 }

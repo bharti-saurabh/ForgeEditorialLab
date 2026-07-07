@@ -138,6 +138,8 @@ interface AppState {
   addFairnessFlag: (flag: FairnessFlag) => void
   /** send the piece back to Step 2 for revision (re-open the loop) */
   requestRevisions: (note: string) => void
+  /** dismiss the Step-2 revision-ask banner */
+  clearRevisionNote: () => void
   /** load the preloaded, finished end-to-end example run into the pipeline */
   loadCompletedRun: () => void
 
@@ -193,6 +195,22 @@ const EMPTY_PIPELINE: PipelineState = {
   publish: null,
   persona: null,
   revision: 0,
+  revisionNote: '',
+}
+
+/**
+ * Merge a persisted pipeline over the current defaults. Top-level fields backfill
+ * via the spread; nested snapshots that predate a schema change are dropped so the
+ * new UI never reads a half-populated object (the user just re-runs that stage).
+ */
+function mergePipeline(persisted?: Partial<PipelineState>): PipelineState {
+  const merged: PipelineState = { ...EMPTY_PIPELINE, ...(persisted ?? {}) }
+  // Persona Lab was redesigned into a live focus group — an older persona (survey
+  // shape, no `stage`) can't render; drop it so the user just re-runs the group.
+  if (merged.persona && (merged.persona as Partial<PersonaLabState>).stage === undefined) {
+    merged.persona = null
+  }
+  return merged
 }
 
 /** True for a base64/inline data URL (the heavy payload we don't persist). */
@@ -353,6 +371,7 @@ export const useAppStore = create<AppState>()(
                   compliance: null,
                   publish: null,
                   persona: null,
+                  revisionNote: '',
                 }
               : { ...s.pipeline, selectedTopicId: id },
           }
@@ -605,6 +624,7 @@ export const useAppStore = create<AppState>()(
             pipeline: {
               ...s.pipeline,
               revision: s.pipeline.revision + 1,
+              revisionNote: note,
               publish: null,
               persona: null,
               compliance: c
@@ -625,6 +645,8 @@ export const useAppStore = create<AppState>()(
             },
           }
         }),
+      clearRevisionNote: () =>
+        set((s) => ({ pipeline: { ...s.pipeline, revisionNote: '' } })),
       loadCompletedRun: () =>
         set({ pipeline: buildCompletedPipeline(), activeView: 'overview' }),
 
@@ -657,7 +679,7 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'forge-state-v1',
-      version: 3,
+      version: 5,
       storage: createJSONStorage(() => safeStorage),
       // Upgrade older persisted state so pre-Increment-4 pipelines (missing
       // publish/persona/revision) and pre-multi-provider settings (missing
@@ -667,7 +689,7 @@ export const useAppStore = create<AppState>()(
         return {
           ...s,
           settings: mergeSettings(s.settings),
-          pipeline: { ...EMPTY_PIPELINE, ...(s.pipeline ?? {}) },
+          pipeline: mergePipeline(s.pipeline),
         }
       },
       // Belt-and-suspenders: deep-merge persisted settings + pipeline over
@@ -678,7 +700,7 @@ export const useAppStore = create<AppState>()(
           ...current,
           ...p,
           settings: mergeSettings(p.settings),
-          pipeline: { ...EMPTY_PIPELINE, ...(p.pipeline ?? {}) },
+          pipeline: mergePipeline(p.pipeline),
         }
       },
       // Persist everything EXCEPT base64 image payloads — those (generated

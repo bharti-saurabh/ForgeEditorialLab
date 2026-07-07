@@ -1,9 +1,10 @@
 # Forge (Editorial Lab) — Progress, Approach & Learnings
 
 > Living handoff doc. Purpose: survive context compaction. If you're resuming
-> cold, read this top-to-bottom first. Last updated after the **Step-5 (Publish
-> Package) Phase 1 + 2 rework** (see §12). Prior milestone: Step-4 rework + the
-> compliance image-prompt-scan bug fix.
+> cold, read this top-to-bottom first. Last updated after **Persona Lab was
+> redesigned into a live agentic focus group — Phases 1, 2 + 3 all built (§14).**
+> ⚠️ §13 (the survey/metrics rework) is now SUPERSEDED by §14 — the survey
+> engine was torn out. Prior milestones: Step-5 rework (§12), Step-4 rework.
 
 ---
 
@@ -333,6 +334,140 @@ channel detail/editor) and closed all seven gaps from §10.
 
 **Build:** `npm run build` clean; Recharts still isolated to the PersonaLabView chunk.
 **Not yet committed** at time of writing.
+
+---
+
+## 13. Step 6 (Persona Lab) — Phase 1 + 2 rework (BUILT)
+
+**Critique:** the panel never read the artifact. `simulateSurvey`/`simulateComment`/
+the synthesis prompt consumed only two scalars (brandMatch, complianceScore) + the
+topic title + a per-segment hash — so editing copy/visual/CTA moved nothing. Also
+channel-blind, false precision (n=3–10 shown as exact integers, deterministic re-run),
+templated quotes, no variant compare, revisions carried nothing, crude substring
+fairness screen, flat unweighted overall.
+
+**Decision:** Phase 1 + 2, and **Re-run resamples** (fresh seed each run).
+
+### Phase 1 — ground the panel in the real artifact
+- **`analyzeDraftForPersona(draft, channel, profile, hasVisual)` → `ContentSignal`**
+  (`persona.ts`): readability (sentence length + long-word ratio), CTA-presence,
+  channel-fit (body words vs per-channel band `CHANNEL_WORDS`), reassurance cues,
+  and `objectionCoverage(objections)` — how well the copy engages+answers a
+  segment's stated objections.
+- **`simulateSurvey` rewritten** to consume the signal + a per-run `seed`:
+  Clarity←readability, Trust←compliance+objectionCoverage, Appeal←alignment+
+  channelFit+visual, Intent←appeal/trust+**CTA present**+channelFit+funnel. Editing
+  the copy now moves scores.
+- **`simulateComment`** grounds each quote in a real line (`signal.leadLine`); a
+  positive voice no longer shows an objection.
+- **Synthesis prompt** (`prompts/persona.ts`) now includes the headline + a 700-char
+  copy excerpt + the surface, and asks the model to react to the actual wording.
+
+### Phase 2 — rigor + handoff
+- **Resample:** each run uses `seed = Date.now() % 1e6` (seeded example run uses a
+  fixed `424242`). `PersonaLabState` gained `runSeed`, `channel`.
+- **Confidence, not false precision:** `confidenceBand(n)` → `PanelConfidence {n,band,
+  level}`; metric tiles show `±band`, a "low/moderate confidence · n=k synthetic" chip.
+- **Weighted overall:** `overallScore` now weights intent .35 / trust .30 / appeal .20 /
+  clarity .15 (`OVERALL_WEIGHTS` exported; weights shown on the tiles).
+- **A/B compare:** `scoreVariant` + `buildComparison` score the chosen draft vs the
+  strongest Step-2 bake-off runner-up on the same panel/seed → `PersonaComparison`
+  (winner/delta), rendered as a two-column card. Null when there's no runner-up.
+- **Revision handoff:** `revisionAsk(state)` builds "lift <weakest metric>; weak with
+  <segments>; recurring objections <…>" and `requestRevisions` writes it to the new
+  `PipelineState.revisionNote`; **Step 2 shows a dismissible banner** (`clearRevisionNote`).
+- **Master-detail** per-segment drill-down (segment list ↔ metrics bars + quote +
+  motivations/objections), replacing the flat comment list. Kept the two aggregate charts.
+- **Hardened fairness:** `checkFairness` now uses word-boundary regexes per protected
+  basis (+ veteran status, more proxies) — kills the `'men '`/`'age '` substring hacks
+  and their false-positives (e.g. "management").
+
+### Store / migration
+- `PipelineState.revisionNote` added (EMPTY_PIPELINE, selectTopic reset, seed).
+- **persist bumped to v4** + new `mergePipeline()` used by migrate & merge: drops a
+  persona snapshot saved before this change (no `confidence`) so the new UI never
+  reads a half-populated object — user just re-runs the panel.
+
+**Build:** clean; Recharts still isolated to the PersonaLabView lazy chunk.
+
+---
+
+## 14. Persona Lab → live agentic focus group (Phases 1 + 2 BUILT; Phase 3 pending)
+
+**User's new vision (replaces the survey model in §13):** (1) user picks which
+behavioral segments + how many participants; (2) an LLM generates detailed
+individual personas; (3) a **moderator agent** runs a **live, streamed** focus
+group where each participant reacts in turn; (4) summary + light stats; (5) a set
+of **selectable** recommendations that revamp the content. Confirmed choices:
+**qual + light end-stats** (dropped the 4-metric survey/gauge + A/B), **stream
+turn-by-turn**, recommendations **both carry to Step 2 AND draft revised copy inline**.
+
+### Data model (types.ts — PersonaLabState fully redefined)
+- Removed: FocusComment, SurveyRow, SurveyMetric, PersonaRecommendation,
+  PanelConfidence, VariantScore, PersonaComparison.
+- Added: `FocusGroupConfig`, `Participant` (name, segment, archetype, personality,
+  likes/dislikes/interests/goals/frustrations, bio, voice, avatarSeed), `AgendaItem`,
+  `DiscussionTurn` (moderator|participant, sentiment), `ThemeStat`, `FocusGroupStats`,
+  `ContentRecommendation`, `RevisedDraft`, `FocusGroupStage = personas|discussion|complete`.
+- `PersonaLabState` now: `{ runAt, channel, stage, config, participants, agenda,
+  transcript, summary, stats, recommendations, selectedRecIds, revisedDraft,
+  moderatorModelLabel, mode, fairnessNote, fairnessFlags }`.
+
+### New / changed modules
+- **`src/lib/persona.ts`** trimmed to shared helpers: `LENS_ORDER`,
+  `PARTICIPANT_MIN/MAX` (3–8), `SEGMENT_MIN`, `FAIRNESS_NOTE`, `hashStr/unit/pick`,
+  `defaultPanel`, `SENTIMENT_TONE`, hardened `checkFairness` (word-boundary regex).
+- **`src/lib/focusGroup.ts`** (NEW): `demoParticipants`/`coerceParticipant`
+  (deterministic, neutral names), `distributeSegments`, `buildAgenda` (5 beats:
+  first impressions→clarity/trust→offer&CTA→objections→would-you-act),
+  `moderatorOpening`, `demoDiscussionTurns`/`coerceTurns` (per-beat, sentiment-tagged).
+- **`src/lib/prompts/persona.ts`** rewritten: `PERSONA_GEN_SYSTEM` +
+  `buildPersonaGenPrompt` (Phase 1), `DISCUSSION_SYSTEM` + `buildDiscussionPrompt`
+  (Phase 2). **Fairness enforced in the system prompts** (behavioral only; names are
+  flavor, never a demographic basis).
+- **`PersonaLabView.tsx`** rewritten to 3 UI steps: **SetupCard** (segment picker +
+  participant stepper + custom-segment add, fairness-screened) → **Roster**
+  (participant cards + agenda preview + "Start the discussion") → **Discussion**
+  (moderator opening, then per-beat turns **streamed** via an async loop with
+  `sleep()` reveal + typing indicator; Stop/Re-run; "New group"). Avatars = initials
+  + 6-slot palette. Export = transcript md/json.
+
+### Router / demo path
+- Persona gen + each agenda beat call `runChat({role:'strategy'})`; both have full
+  deterministic demo fallbacks so the whole group runs with **zero keys**. Streaming
+  = generate per beat, reveal turns with a timer (works live + demo).
+
+### Store / seed / persist
+- `PipelineState` unchanged here; **persist bumped to v5**; `mergePipeline` now drops
+  a persona lacking `stage` (old survey shape) so the new UI can't read it.
+- Seed "Load example run" builds a **stage:'personas'** roster (config + participants
+  + agenda) — opens with a ready focus group. (Enrich to a full `complete` run when
+  Phase 3 lands.)
+- **Recharts is now fully tree-shaken** (Persona Lab was its only consumer). Phase 3
+  re-introduces it for the stats charts — keep it isolated to the PersonaLabView chunk.
+
+### Phase 3 — wrap-up, recommendations, inline revise (BUILT)
+- **`focusGroup.ts`**: `computeStats(transcript, participants)` → `FocusGroupStats`
+  (sentiment split, theme frequency from shared frustrations/goals, standout quotes,
+  `resonance` strong|mixed|weak from net sentiment); `demoSummary`, `demoRecommendations`
+  (concern-keyword → fix templates), `demoRevise` (inserts a plain-terms clarity block,
+  keeps disclosures + `[APR]`/`[term]` placeholders).
+- **`prompts/persona.ts`**: `SUMMARY_SYSTEM`/`buildSummaryPrompt` (returns
+  `{summary, recommendations[]}`), `REVISE_SYSTEM`/`buildRevisePrompt` (returns
+  `{title, body}`; forbids dropping disclosures or inventing figures).
+- **View**: after the discussion, a **"Summarize & get recommendations"** card →
+  `wrapUp()` sets `stage:'complete'` with stats/summary/recs. Then a **Results** block:
+  summary card, stats card (CSS sentiment bars + theme chips + standout quotes +
+  resonance badge — **no recharts**), and a **selectable recommendations** list
+  (checkboxes → `selectedRecIds`). **Apply & draft revised copy** → `revise()` calls the
+  copy model → **inline revised-copy preview** (Markdown) with Copy + **Send brief to
+  Step 2** (`requestRevisions` → `revisionNote` banner). Export md now includes
+  summary/stats/recs/revised copy.
+- **Seed**: "Load example run" now builds a full **`stage:'complete'`** focus group
+  (moderator opening + per-beat turns + stats + summary + recommendations).
+
+**Build:** clean at each step. Recharts stayed removed (stats use CSS bars). **Not yet
+committed/deployed.**
 
 ---
 
