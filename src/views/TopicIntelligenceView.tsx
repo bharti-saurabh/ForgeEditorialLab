@@ -21,9 +21,18 @@ import {
   type TopicScore,
 } from '@/lib/topics'
 import { buildTopicIntelPrompt, demoTopicIntel, TOPIC_INTEL_SYSTEM } from '@/lib/prompts/topicIntel'
+import {
+  buildTopicSearchPrompt,
+  demoTopicSearch,
+  coerceReco,
+  TOPIC_SEARCH_SYSTEM,
+  type RawReco,
+} from '@/lib/prompts/topicIntel'
 import { runChat } from '@/lib/router/router'
+import { parseJsonLoose } from '@/lib/json'
 import { uid, fmtMs, fmtDateTime } from '@/lib/format'
 import type {
+  CallMode,
   CompetitorMove,
   DemandTrend,
   FunnelStage,
@@ -101,6 +110,11 @@ export function TopicIntelligenceView() {
   const [activeId, setActiveId] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
 
+  // Generative campaign search — a free-text query → one pointed recommendation.
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searching, setSearching] = useState(false)
+  const [reco, setReco] = useState<{ raw: RawReco; topic: TopicOpportunity; modelLabel: string; mode: CallMode } | null>(null)
+
   // Top-bar tools that overlay in any mode.
   const [showRead, setShowRead] = useState(false)
   const [showCompetitor, setShowCompetitor] = useState(false)
@@ -150,17 +164,85 @@ export function TopicIntelligenceView() {
 
   function focusTopic(id: string) {
     setAdding(false)
+    setReco(null)
     setActiveId(id)
   }
 
   function backToOverview() {
     setActiveId(null)
     setAdding(false)
+    setReco(null)
   }
 
   function openAdd() {
     setActiveId(null)
+    setReco(null)
     setAdding(true)
+  }
+
+  function recoToTopic(raw: RawReco): TopicOpportunity {
+    return {
+      id: `topic_reco_${uid()}`,
+      title: raw.title,
+      rationale: raw.rationale,
+      audienceSegment: raw.audienceSegment,
+      funnelStage: raw.funnelStage,
+      format: raw.format,
+      demand: raw.demand,
+      demandScore: DEMAND_SCORE[raw.demand],
+      difficulty: raw.difficulty,
+      complianceSensitivity: raw.complianceSensitivity,
+      onBrand: raw.onBrand,
+      offBrandReason: raw.offBrandReason || undefined,
+      tags: raw.tags,
+      origin: 'user',
+    }
+  }
+
+  async function runSearch(qArg?: string) {
+    const q = (qArg ?? searchQuery).trim()
+    if (!q || searching) return
+    if (qArg) setSearchQuery(qArg)
+    setSearching(true)
+    try {
+      const base = demoTopicSearch(profile, q)
+      const { text, mode, entry } = await runChat({
+        role: 'strategy',
+        step: 'Step 1 · Campaign recommendation',
+        system: TOPIC_SEARCH_SYSTEM,
+        user: buildTopicSearchPrompt(profile, q),
+        reason: 'Strategy model — turns a free-text theme into one pointed, on-brand campaign recommendation.',
+        maxTokens: 700,
+        demo: () => JSON.stringify(base),
+      })
+      const raw = coerceReco(base, parseJsonLoose<Partial<RawReco>>(text))
+      setAdding(false)
+      setActiveId(null)
+      setReco({ raw, topic: recoToTopic(raw), modelLabel: entry.modelLabel, mode })
+      pushToast(mode === 'live' ? 'success' : 'info', 'Campaign recommendation ready.')
+    } catch {
+      pushToast('error', 'Could not generate a recommendation.')
+    } finally {
+      setSearching(false)
+    }
+  }
+
+  function takeRecoForward() {
+    if (!reco) return
+    addUserTopic(reco.topic)
+    selectTopic(reco.topic.id)
+    setReco(null)
+    pushToast('success', `Selected "${reco.topic.title}" for the brief.`)
+    setView('step-2')
+  }
+
+  function addRecoToBacklog() {
+    if (!reco) return
+    addUserTopic(reco.topic)
+    const id = reco.topic.id
+    setReco(null)
+    setActiveId(id)
+    pushToast('success', 'Added the recommendation to your backlog.')
   }
 
   async function runAnalysis() {
@@ -251,6 +333,14 @@ export function TopicIntelligenceView() {
         }
       />
 
+      <CampaignSearch
+        query={searchQuery}
+        onQuery={setSearchQuery}
+        onSearch={() => runSearch()}
+        onExample={(ex) => runSearch(ex)}
+        searching={searching}
+      />
+
       <div className="grid gap-5 lg:grid-cols-[minmax(340px,380px)_1fr]">
         {/* LEFT — ranked backlog (sticky driver) */}
         <div>
@@ -282,7 +372,7 @@ export function TopicIntelligenceView() {
                 <input
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search topics, segments, tags…"
+                  placeholder="Filter this backlog…"
                   className="h-9 w-full rounded-lg border border-ink-200 bg-white px-3 text-sm text-ink-800 placeholder:text-ink-400 focus:border-straive-400 focus:outline-none focus:ring-2 focus:ring-straive-500/20"
                 />
                 <div className="flex flex-wrap items-center gap-1.5">
@@ -343,6 +433,15 @@ export function TopicIntelligenceView() {
         <div className="min-w-0 space-y-5">
           {adding ? (
             <AddTopicForm onAdd={handleAdd} onCancel={backToOverview} />
+          ) : reco ? (
+            <RecommendationCard
+              raw={reco.raw}
+              modelLabel={reco.modelLabel}
+              mode={reco.mode}
+              onTakeForward={takeRecoForward}
+              onAddToBacklog={addRecoToBacklog}
+              onDismiss={() => setReco(null)}
+            />
           ) : activeRow ? (
             <TopicDetail
               row={activeRow}
@@ -466,6 +565,174 @@ export function TopicIntelligenceView() {
       >
         <CompetitorFeed />
       </Modal>
+    </div>
+  )
+}
+
+/* ----------------------------------------------------------------------------
+ * Generative campaign search — free-text query → one pointed recommendation
+ * ------------------------------------------------------------------------- */
+
+const SEARCH_EXAMPLES = [
+  'Balance transfers for holiday debt',
+  'Building credit from scratch',
+  'Travel rewards for first-timers',
+  'Avoiding late fees',
+]
+
+function CampaignSearch({
+  query,
+  onQuery,
+  onSearch,
+  onExample,
+  searching,
+}: {
+  query: string
+  onQuery: (v: string) => void
+  onSearch: () => void
+  onExample: (ex: string) => void
+  searching: boolean
+}) {
+  return (
+    <Card className="mb-5">
+      <CardBody>
+        <div className="flex items-center gap-2 text-sm font-semibold text-ink-800">
+          <IconSparkles size={16} className="text-straive-500" />
+          Describe a campaign idea — get a pointed recommendation
+        </div>
+        <p className="mt-0.5 text-xs text-ink-500">
+          Search any theme and the strategy model returns one on-brand, compliance-aware campaign you can take
+          straight into the brief.
+        </p>
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+          <input
+            value={query}
+            onChange={(e) => onQuery(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && onSearch()}
+            placeholder="e.g. balance transfers for gig workers, building credit, holiday spending…"
+            className="h-11 flex-1 rounded-xl border border-ink-200 bg-white px-4 text-sm text-ink-800 placeholder:text-ink-400 focus:border-straive-400 focus:outline-none focus:ring-2 focus:ring-straive-500/20"
+          />
+          <Button
+            variant="primary"
+            loading={searching}
+            icon={!searching ? <IconSparkles size={15} /> : undefined}
+            disabled={!query.trim() || searching}
+            onClick={onSearch}
+            className="sm:px-6"
+          >
+            Recommend
+          </Button>
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <span className="text-[11px] text-ink-400">Try:</span>
+          {SEARCH_EXAMPLES.map((ex) => (
+            <button
+              key={ex}
+              onClick={() => onExample(ex)}
+              disabled={searching}
+              className="rounded-full border border-ink-200 bg-white px-2.5 py-1 text-[11px] font-medium text-ink-600 transition hover:border-straive-300 hover:text-straive-700 disabled:opacity-50"
+            >
+              {ex}
+            </button>
+          ))}
+        </div>
+      </CardBody>
+    </Card>
+  )
+}
+
+/** The generated campaign recommendation, shown in the detail panel. */
+function RecommendationCard({
+  raw,
+  modelLabel,
+  mode,
+  onTakeForward,
+  onAddToBacklog,
+  onDismiss,
+}: {
+  raw: RawReco
+  modelLabel: string
+  mode: CallMode
+  onTakeForward: () => void
+  onAddToBacklog: () => void
+  onDismiss: () => void
+}) {
+  return (
+    <Card className="ring-2 ring-straive-500/25">
+      <CardHeader
+        icon={<IconSparkles size={18} className="text-straive-500" />}
+        title={
+          <span className="flex flex-wrap items-center gap-2">
+            {raw.title}
+            {raw.onBrand ? <Badge tone="ok">On-brand</Badge> : <Badge tone="warn">Off-brand</Badge>}
+          </span>
+        }
+        subtitle="Recommended campaign — review, then take it forward or park it in the backlog."
+        actions={
+          <div className="flex items-center gap-2">
+            <ModelTag role="strategy" modelLabel={modelLabel} mode={mode} />
+            <Button variant="ghost" size="sm" onClick={onDismiss}>Dismiss</Button>
+          </div>
+        }
+      />
+      <CardBody className="space-y-4">
+        <p className="text-sm italic text-ink-700">{raw.angle}</p>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge tone="neutral" className="capitalize">{raw.funnelStage}</Badge>
+          <Badge tone="neutral" className="capitalize">{raw.format}</Badge>
+          <Badge tone="neutral">Demand: {raw.demand}</Badge>
+          <Badge tone={ratingTone(raw.difficulty)}>Difficulty: {raw.difficulty}</Badge>
+          <Badge tone={ratingTone(raw.complianceSensitivity)}>Compliance: {raw.complianceSensitivity}</Badge>
+        </div>
+
+        {!raw.onBrand && raw.offBrandReason && (
+          <p className="rounded-lg border border-warn/25 bg-warn/5 px-3 py-2 text-xs text-ink-700">
+            <span className="font-semibold text-warn">Off-brand flag: </span>
+            {raw.offBrandReason}
+          </p>
+        )}
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <RecoField label="Who it's for" value={raw.audienceSegment} />
+          <RecoField label="Why now" value={raw.whyNow} />
+        </div>
+        <RecoField label="Key message" value={raw.keyMessage} />
+
+        <p className="text-sm text-ink-700">
+          <span className="font-semibold text-ink-800">Why it fits: </span>
+          {raw.rationale}
+        </p>
+
+        {raw.tags.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {raw.tags.map((t) => (
+              <span key={t} className="rounded-md bg-ink-50 px-2 py-0.5 text-[11px] font-medium text-ink-500 ring-1 ring-ink-200">
+                #{t}
+              </span>
+            ))}
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2 border-t border-ink-100 pt-3.5">
+          <Button variant={raw.onBrand ? 'primary' : 'secondary'} onClick={onTakeForward}>
+            {raw.onBrand ? 'Take forward to brief' : 'Review anyway'}
+            <IconChevron size={14} />
+          </Button>
+          <Button variant="secondary" size="sm" icon={<IconPlus size={14} />} onClick={onAddToBacklog}>
+            Add to backlog
+          </Button>
+        </div>
+      </CardBody>
+    </Card>
+  )
+}
+
+function RecoField({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-ink-200 bg-ink-50/50 p-3">
+      <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide text-ink-400">{label}</div>
+      <p className="text-sm text-ink-700">{value}</p>
     </div>
   )
 }
