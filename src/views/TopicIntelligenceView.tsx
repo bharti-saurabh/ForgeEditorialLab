@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useAppStore } from '@/store/useAppStore'
 import { Card, CardBody, CardHeader } from '@/components/Card'
 import { Button } from '@/components/Button'
@@ -9,7 +9,6 @@ import { ModelTag } from '@/components/ModelTag'
 import { ExportButton } from '@/components/ExportButton'
 import { Sparkline } from '@/components/Sparkline'
 import { SEED_TOPIC_BACKLOG } from '@/seed/topicBacklog'
-import { SEED_COMPETITOR_MOVES } from '@/seed/competitorMoves'
 import {
   rankTopics,
   sortRanked,
@@ -22,18 +21,20 @@ import {
 } from '@/lib/topics'
 import { buildTopicIntelPrompt, demoTopicIntel, TOPIC_INTEL_SYSTEM } from '@/lib/prompts/topicIntel'
 import {
-  buildTopicSearchPrompt,
-  demoTopicSearch,
+  buildGroundedRecoPrompt,
+  demoGroundedReco,
   coerceReco,
-  TOPIC_SEARCH_SYSTEM,
+  GROUNDED_SEARCH_SYSTEM,
   type RawReco,
 } from '@/lib/prompts/topicIntel'
 import { runChat } from '@/lib/router/router'
 import { parseJsonLoose } from '@/lib/json'
+import { discoverTopic } from '@/discovery/discover'
+import { fetchTrending } from '@/discovery/trending'
+import type { DiscoverPayload, Mode as DiscoveryMode, TrendingBoard } from '@/discovery/types'
 import { uid, fmtMs, fmtDateTime } from '@/lib/format'
 import type {
   CallMode,
-  CompetitorMove,
   DemandTrend,
   FunnelStage,
   Rating,
@@ -52,6 +53,7 @@ import {
   IconEye,
   IconLayers,
   IconX,
+  IconRefresh,
 } from '@/components/icons'
 import { cn } from '@/lib/cn'
 
@@ -113,11 +115,19 @@ export function TopicIntelligenceView() {
   // Generative campaign search — a free-text query → one pointed recommendation.
   const [searchQuery, setSearchQuery] = useState('')
   const [searching, setSearching] = useState(false)
-  const [reco, setReco] = useState<{ raw: RawReco; topic: TopicOpportunity; modelLabel: string; mode: CallMode } | null>(null)
+  const [reco, setReco] = useState<{
+    raw: RawReco
+    topic: TopicOpportunity
+    modelLabel: string
+    mode: CallMode
+    discovery: DiscoverPayload
+    discoveryMode: DiscoveryMode
+    discoveryNote?: string
+  } | null>(null)
 
   // Top-bar tools that overlay in any mode.
   const [showRead, setShowRead] = useState(false)
-  const [showCompetitor, setShowCompetitor] = useState(false)
+  const [showBacklog, setShowBacklog] = useState(false)
 
   const ranked = useMemo(
     () => rankTopics([...SEED_TOPIC_BACKLOG, ...userTopics], weights),
@@ -166,6 +176,7 @@ export function TopicIntelligenceView() {
     setAdding(false)
     setReco(null)
     setActiveId(id)
+    setShowBacklog(false)
   }
 
   function backToOverview() {
@@ -178,6 +189,7 @@ export function TopicIntelligenceView() {
     setActiveId(null)
     setReco(null)
     setAdding(true)
+    setShowBacklog(false)
   }
 
   function recoToTopic(raw: RawReco): TopicOpportunity {
@@ -205,21 +217,32 @@ export function TopicIntelligenceView() {
     if (qArg) setSearchQuery(qArg)
     setSearching(true)
     try {
-      const base = demoTopicSearch(profile, q)
+      // 1) Pull real market signals (trending / competitor angles / buzz).
+      const disc = await discoverTopic(q)
+      // 2) Synthesize one pointed recommendation grounded in those signals.
+      const base = demoGroundedReco(profile, q, disc.payload)
       const { text, mode, entry } = await runChat({
         role: 'strategy',
-        step: 'Step 1 · Campaign recommendation',
-        system: TOPIC_SEARCH_SYSTEM,
-        user: buildTopicSearchPrompt(profile, q),
-        reason: 'Strategy model — turns a free-text theme into one pointed, on-brand campaign recommendation.',
-        maxTokens: 700,
+        step: 'Step 1 · Grounded campaign recommendation',
+        system: GROUNDED_SEARCH_SYSTEM,
+        user: buildGroundedRecoPrompt(profile, q, disc.payload),
+        reason: 'Strategy model — grounds one pointed, on-brand campaign recommendation in real trending/competitor/buzz signals.',
+        maxTokens: 800,
         demo: () => JSON.stringify(base),
       })
       const raw = coerceReco(base, parseJsonLoose<Partial<RawReco>>(text))
       setAdding(false)
       setActiveId(null)
-      setReco({ raw, topic: recoToTopic(raw), modelLabel: entry.modelLabel, mode })
-      pushToast(mode === 'live' ? 'success' : 'info', 'Campaign recommendation ready.')
+      setReco({
+        raw,
+        topic: recoToTopic(raw),
+        modelLabel: entry.modelLabel,
+        mode,
+        discovery: disc.payload,
+        discoveryMode: disc.mode,
+        discoveryNote: disc.note,
+      })
+      pushToast(mode === 'live' ? 'success' : 'info', 'Grounded campaign recommendation ready.')
     } catch {
       pushToast('error', 'Could not generate a recommendation.')
     } finally {
@@ -308,7 +331,7 @@ export function TopicIntelligenceView() {
     <div className="mx-auto max-w-7xl">
       <SectionTitle
         title="Step 1 · Topic Intelligence"
-        description="A self-serve opportunity workspace. Tune what matters, scan the ranked backlog on the left, and open any topic to see its evidence before taking it forward."
+        description="A self-serve opportunity workspace. Watch what's trending live on the left, describe a campaign to get a grounded recommendation, or browse the ranked backlog."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <Button
@@ -322,29 +345,174 @@ export function TopicIntelligenceView() {
             <Button
               variant="secondary"
               size="sm"
-              icon={<IconEye size={15} />}
-              onClick={() => setShowCompetitor(true)}
+              icon={<IconLayers size={15} />}
+              onClick={() => { setAdding(false); setShowBacklog(true) }}
             >
-              Competitor watch
-              <span className="ml-1.5 h-1.5 w-1.5 rounded-full bg-crit animate-pulse-dot" />
+              Backlog
+              <span className="ml-1.5 rounded-full bg-ink-200 px-1.5 text-[10px] font-bold text-ink-600">{ranked.length}</span>
             </Button>
             <ExportButton name="topic-intelligence" json={exportPayload} markdown={exportMd} />
           </div>
         }
       />
 
-      <CampaignSearch
-        query={searchQuery}
-        onQuery={setSearchQuery}
-        onSearch={() => runSearch()}
-        onExample={(ex) => runSearch(ex)}
-        searching={searching}
-      />
-
-      <div className="grid gap-5 lg:grid-cols-[minmax(340px,380px)_1fr]">
-        {/* LEFT — ranked backlog (sticky driver) */}
+      <div className="grid gap-5 lg:grid-cols-[minmax(360px,420px)_1fr]">
+        {/* LEFT — find an opportunity: describe an idea OR pick a trend */}
         <div>
-          <div className="lg:sticky lg:top-4">
+          <div className="lg:sticky lg:top-4 space-y-3">
+            <CampaignSearch
+              query={searchQuery}
+              onQuery={setSearchQuery}
+              onSearch={() => runSearch()}
+              onExample={(ex) => runSearch(ex)}
+              searching={searching}
+            />
+            <div className="flex items-center gap-2 px-1">
+              <span className="h-px flex-1 bg-ink-200" />
+              <span className="text-[11px] font-medium uppercase tracking-wide text-ink-400">or pick what's trending</span>
+              <span className="h-px flex-1 bg-ink-200" />
+            </div>
+            <TrendingNow onPick={(t) => void runSearch(t)} busy={searching} />
+          </div>
+        </div>
+
+        {/* RIGHT — the result: recommendation / detail / add / overview */}
+        <div className="min-w-0 space-y-5">
+          {adding ? (
+            <AddTopicForm onAdd={handleAdd} onCancel={backToOverview} />
+          ) : reco ? (
+            <RecommendationCard
+              raw={reco.raw}
+              modelLabel={reco.modelLabel}
+              mode={reco.mode}
+              discovery={reco.discovery}
+              discoveryMode={reco.discoveryMode}
+              discoveryNote={reco.discoveryNote}
+              onTakeForward={takeRecoForward}
+              onAddToBacklog={addRecoToBacklog}
+              onDismiss={() => setReco(null)}
+            />
+          ) : activeRow ? (
+            <TopicDetail
+              row={activeRow}
+              taken={activeRow.topic.id === selectedTopicId}
+              onTakeForward={() => takeForward(activeRow)}
+              onRemove={() => handleRemove(activeRow)}
+              onBack={backToOverview}
+            />
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <Stat label="Opportunities" value={ranked.length} />
+                <Stat label="Trending now" value={trendingCount} tone="ok" />
+                <Stat label="On-brand" value={`${onBrandCount}/${ranked.length}`} tone="ok" />
+                <Stat label="High compliance risk" value={highRisk} tone={highRisk ? 'warn' : 'ok'} />
+              </div>
+
+              <Card>
+                <CardBody className="space-y-4">
+                  <EmptyState
+                    icon={<IconLayers size={22} />}
+                    title="Your recommendation appears here"
+                    description="Describe a campaign idea or pick a trend on the left to get a grounded recommendation with cited sources. Prefer the ranked list? Open the backlog."
+                  />
+                  <div className="flex flex-wrap justify-center gap-2">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      icon={<IconSparkles size={15} />}
+                      onClick={() => setShowRead(true)}
+                    >
+                      AI editorial read
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      icon={<IconLayers size={15} />}
+                      onClick={() => { setAdding(false); setShowBacklog(true) }}
+                    >
+                      Browse backlog
+                    </Button>
+                  </div>
+                </CardBody>
+              </Card>
+            </>
+          )}
+
+          <p className="text-xs text-ink-400">
+            Trend & competitor signals are compiled from public sources (cited) as of mid-2026;
+            scores are illustrative decision support — a human editor selects the topic to take
+            forward.
+          </p>
+        </div>
+      </div>
+
+      {/* AI editorial read — overlay tool */}
+      <Modal
+        open={showRead}
+        onClose={() => setShowRead(false)}
+        size="lg"
+        title={
+          <span className="flex items-center gap-2">
+            <IconSparkles size={18} /> AI editorial read
+          </span>
+        }
+        subtitle="A strategist's synthesis over the ranked backlog — decision support, not a mandate."
+        footer={
+          <Button
+            variant="primary"
+            size="sm"
+            loading={running}
+            icon={!running ? <IconBolt size={15} /> : undefined}
+            onClick={runAnalysis}
+          >
+            {topicRead ? 'Re-run analysis' : 'Prioritize backlog'}
+          </Button>
+        }
+      >
+        {topicRead ? (
+          <div>
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <ModelTag role="strategy" modelLabel={topicRead.modelLabel} mode={topicRead.mode} />
+              <span className="text-xs text-ink-400">
+                Generated {fmtDateTime(topicRead.ranAt)}
+              </span>
+            </div>
+            <div className="space-y-3 text-sm leading-relaxed text-ink-700">
+              {topicRead.text.split('\n\n').map((para, i) => (
+                <p
+                  key={i}
+                  className={cn(
+                    i === topicRead.text.split('\n\n').length - 1 &&
+                      'text-xs italic text-ink-500',
+                  )}
+                >
+                  {para}
+                </p>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <EmptyState
+            icon={<IconSparkles size={20} />}
+            title="No editorial read yet"
+            description="Run the analysis to have the strategy model synthesize the backlog into prioritized recommendations. The ranking is available now."
+          />
+        )}
+      </Modal>
+
+      {/* Ranked backlog — moved behind a button */}
+      <Modal
+        open={showBacklog}
+        onClose={() => setShowBacklog(false)}
+        size="lg"
+        title={
+          <span className="flex items-center gap-2">
+            <IconLayers size={18} /> Ranked backlog
+          </span>
+        }
+        subtitle="Tune what matters, filter, and open any topic to see its evidence — then take it forward."
+      >
             <Card>
               <CardHeader
                 title="Ranked backlog"
@@ -426,144 +594,6 @@ export function TopicIntelligenceView() {
                 ))}
               </div>
             </Card>
-          </div>
-        </div>
-
-        {/* RIGHT — detail / add / overview */}
-        <div className="min-w-0 space-y-5">
-          {adding ? (
-            <AddTopicForm onAdd={handleAdd} onCancel={backToOverview} />
-          ) : reco ? (
-            <RecommendationCard
-              raw={reco.raw}
-              modelLabel={reco.modelLabel}
-              mode={reco.mode}
-              onTakeForward={takeRecoForward}
-              onAddToBacklog={addRecoToBacklog}
-              onDismiss={() => setReco(null)}
-            />
-          ) : activeRow ? (
-            <TopicDetail
-              row={activeRow}
-              taken={activeRow.topic.id === selectedTopicId}
-              onTakeForward={() => takeForward(activeRow)}
-              onRemove={() => handleRemove(activeRow)}
-              onBack={backToOverview}
-            />
-          ) : (
-            <>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <Stat label="Opportunities" value={ranked.length} />
-                <Stat label="Trending now" value={trendingCount} tone="ok" />
-                <Stat label="On-brand" value={`${onBrandCount}/${ranked.length}`} tone="ok" />
-                <Stat label="High compliance risk" value={highRisk} tone={highRisk ? 'warn' : 'ok'} />
-              </div>
-
-              <Card>
-                <CardBody className="space-y-4">
-                  <EmptyState
-                    icon={<IconLayers size={22} />}
-                    title="Pick a topic to dig in"
-                    description="Select any topic on the left to see its demand trend, competitor coverage, sources, and score breakdown — then take it forward. Or open one of the tools below."
-                  />
-                  <div className="flex flex-wrap justify-center gap-2">
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      icon={<IconSparkles size={15} />}
-                      onClick={() => setShowRead(true)}
-                    >
-                      AI editorial read
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      icon={<IconEye size={15} />}
-                      onClick={() => setShowCompetitor(true)}
-                    >
-                      Competitor watch
-                    </Button>
-                  </div>
-                </CardBody>
-              </Card>
-            </>
-          )}
-
-          <p className="text-xs text-ink-400">
-            Trend & competitor signals are compiled from public sources (cited) as of mid-2026;
-            scores are illustrative decision support — a human editor selects the topic to take
-            forward.
-          </p>
-        </div>
-      </div>
-
-      {/* AI editorial read — overlay tool */}
-      <Modal
-        open={showRead}
-        onClose={() => setShowRead(false)}
-        size="lg"
-        title={
-          <span className="flex items-center gap-2">
-            <IconSparkles size={18} /> AI editorial read
-          </span>
-        }
-        subtitle="A strategist's synthesis over the ranked backlog — decision support, not a mandate."
-        footer={
-          <Button
-            variant="primary"
-            size="sm"
-            loading={running}
-            icon={!running ? <IconBolt size={15} /> : undefined}
-            onClick={runAnalysis}
-          >
-            {topicRead ? 'Re-run analysis' : 'Prioritize backlog'}
-          </Button>
-        }
-      >
-        {topicRead ? (
-          <div>
-            <div className="mb-3 flex flex-wrap items-center gap-2">
-              <ModelTag role="strategy" modelLabel={topicRead.modelLabel} mode={topicRead.mode} />
-              <span className="text-xs text-ink-400">
-                Generated {fmtDateTime(topicRead.ranAt)}
-              </span>
-            </div>
-            <div className="space-y-3 text-sm leading-relaxed text-ink-700">
-              {topicRead.text.split('\n\n').map((para, i) => (
-                <p
-                  key={i}
-                  className={cn(
-                    i === topicRead.text.split('\n\n').length - 1 &&
-                      'text-xs italic text-ink-500',
-                  )}
-                >
-                  {para}
-                </p>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <EmptyState
-            icon={<IconSparkles size={20} />}
-            title="No editorial read yet"
-            description="Run the analysis to have the strategy model synthesize the backlog into prioritized recommendations. The ranking is available now."
-          />
-        )}
-      </Modal>
-
-      {/* Competitor watch — overlay tool (simulated live feed) */}
-      <Modal
-        open={showCompetitor}
-        onClose={() => setShowCompetitor(false)}
-        size="lg"
-        title={
-          <span className="flex items-center gap-2">
-            <IconEye size={18} /> Competitor watch
-          </span>
-        }
-        subtitle="Recent moves from major issuers — a simulated live feed for market context."
-      >
-        <CompetitorFeed />
       </Modal>
     </div>
   )
@@ -594,43 +624,40 @@ function CampaignSearch({
   searching: boolean
 }) {
   return (
-    <Card className="mb-5">
-      <CardBody>
+    <Card>
+      <CardBody className="space-y-2.5">
         <div className="flex items-center gap-2 text-sm font-semibold text-ink-800">
           <IconSparkles size={16} className="text-straive-500" />
-          Describe a campaign idea — get a pointed recommendation
+          Describe a campaign idea
         </div>
-        <p className="mt-0.5 text-xs text-ink-500">
-          Search any theme and the strategy model returns one on-brand, compliance-aware campaign you can take
-          straight into the brief.
+        <p className="text-xs leading-snug text-ink-500">
+          Type a theme → one on-brand, compliance-aware recommendation, grounded in live trends with cited sources.
         </p>
-        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-          <input
-            value={query}
-            onChange={(e) => onQuery(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && onSearch()}
-            placeholder="e.g. balance transfers for gig workers, building credit, holiday spending…"
-            className="h-11 flex-1 rounded-xl border border-ink-200 bg-white px-4 text-sm text-ink-800 placeholder:text-ink-400 focus:border-straive-400 focus:outline-none focus:ring-2 focus:ring-straive-500/20"
-          />
-          <Button
-            variant="primary"
-            loading={searching}
-            icon={!searching ? <IconSparkles size={15} /> : undefined}
-            disabled={!query.trim() || searching}
-            onClick={onSearch}
-            className="sm:px-6"
-          >
-            Recommend
-          </Button>
-        </div>
-        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        <input
+          value={query}
+          onChange={(e) => onQuery(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && onSearch()}
+          placeholder="e.g. balance transfers, building credit, holiday spending…"
+          className="h-10 w-full rounded-lg border border-ink-200 bg-white px-3 text-sm text-ink-800 placeholder:text-ink-400 focus:border-straive-400 focus:outline-none focus:ring-2 focus:ring-straive-500/20"
+        />
+        <Button
+          variant="primary"
+          loading={searching}
+          icon={!searching ? <IconSparkles size={15} /> : undefined}
+          disabled={!query.trim() || searching}
+          onClick={onSearch}
+          className="w-full justify-center"
+        >
+          Recommend
+        </Button>
+        <div className="flex flex-wrap items-center gap-1">
           <span className="text-[11px] text-ink-400">Try:</span>
           {SEARCH_EXAMPLES.map((ex) => (
             <button
               key={ex}
               onClick={() => onExample(ex)}
               disabled={searching}
-              className="rounded-full border border-ink-200 bg-white px-2.5 py-1 text-[11px] font-medium text-ink-600 transition hover:border-straive-300 hover:text-straive-700 disabled:opacity-50"
+              className="rounded-full border border-ink-200 bg-white px-2 py-0.5 text-[11px] font-medium text-ink-600 transition hover:border-straive-300 hover:text-straive-700 disabled:opacity-50"
             >
               {ex}
             </button>
@@ -646,6 +673,9 @@ function RecommendationCard({
   raw,
   modelLabel,
   mode,
+  discovery,
+  discoveryMode,
+  discoveryNote,
   onTakeForward,
   onAddToBacklog,
   onDismiss,
@@ -653,10 +683,14 @@ function RecommendationCard({
   raw: RawReco
   modelLabel: string
   mode: CallMode
+  discovery: DiscoverPayload
+  discoveryMode: DiscoveryMode
+  discoveryNote?: string
   onTakeForward: () => void
   onAddToBacklog: () => void
   onDismiss: () => void
 }) {
+  const live = discoveryMode === 'live'
   return (
     <Card className="ring-2 ring-straive-500/25">
       <CardHeader
@@ -668,14 +702,23 @@ function RecommendationCard({
           </span>
         }
         subtitle="Recommended campaign — review, then take it forward or park it in the backlog."
-        actions={
-          <div className="flex items-center gap-2">
-            <ModelTag role="strategy" modelLabel={modelLabel} mode={mode} />
-            <Button variant="ghost" size="sm" onClick={onDismiss}>Dismiss</Button>
-          </div>
-        }
+        actions={<Button variant="ghost" size="sm" onClick={onDismiss}>Dismiss</Button>}
       />
       <CardBody className="space-y-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <span
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1',
+              live ? 'bg-ok/10 text-ok ring-ok/25' : 'bg-ink-100 text-ink-500 ring-ink-200',
+            )}
+          >
+            <span className={cn('h-1.5 w-1.5 rounded-full', live ? 'bg-ok' : 'bg-ink-400')} />
+            {live ? 'Grounded · live signals' : 'Grounded · seeded signals'}
+          </span>
+          <ModelTag role="strategy" modelLabel={modelLabel} mode={mode} />
+        </div>
+        {raw.sourceInsight && <p className="text-[11px] text-ink-500">{raw.sourceInsight}</p>}
+
         <p className="text-sm italic text-ink-700">{raw.angle}</p>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -714,6 +757,8 @@ function RecommendationCard({
           </div>
         )}
 
+        <EvidencePanel discovery={discovery} note={discoveryNote} />
+
         <div className="flex flex-wrap items-center gap-2 border-t border-ink-100 pt-3.5">
           <Button variant={raw.onBrand ? 'primary' : 'secondary'} onClick={onTakeForward}>
             {raw.onBrand ? 'Take forward to brief' : 'Review anyway'}
@@ -733,6 +778,79 @@ function RecoField({ label, value }: { label: string; value: string }) {
     <div className="rounded-lg border border-ink-200 bg-ink-50/50 p-3">
       <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide text-ink-400">{label}</div>
       <p className="text-sm text-ink-700">{value}</p>
+    </div>
+  )
+}
+
+const SENTIMENT_DOT: Record<string, string> = { positive: 'bg-ok', mixed: 'bg-warn', negative: 'bg-crit' }
+
+/** The retrieved market signals the recommendation was grounded in. */
+function EvidencePanel({ discovery, note }: { discovery: DiscoverPayload; note?: string }) {
+  const trending = discovery.trending.slice(0, 3)
+  const gap = discovery.competitors[0]
+  const buzz = discovery.buzz.slice(0, 2)
+  const sources = discovery.sources.slice(0, 4)
+  const hasAny = trending.length || gap || buzz.length || sources.length
+  if (!hasAny) return null
+
+  return (
+    <div className="rounded-lg border border-info/20 bg-info/[0.03] p-3">
+      <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-info">
+        <IconEye size={13} /> Evidence behind this
+      </div>
+      <div className="space-y-2.5 text-xs">
+        {trending.length > 0 && (
+          <div>
+            <div className="mb-1 font-semibold text-ink-500">Trending</div>
+            <ul className="space-y-1">
+              {trending.map((t, i) => (
+                <li key={i} className="flex items-start gap-1.5">
+                  <span className={cn('mt-1 h-1.5 w-1.5 shrink-0 rounded-full', t.momentum === 'rising' ? 'bg-ok' : t.momentum === 'new' ? 'bg-info' : 'bg-ink-300')} />
+                  <span className="text-ink-700">
+                    {t.url ? (
+                      <a href={t.url} target="_blank" rel="noreferrer" className="hover:text-info hover:underline">{t.title}</a>
+                    ) : (
+                      t.title
+                    )}
+                    <span className="text-ink-400"> · {t.source} · {t.momentum}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {gap && (
+          <div>
+            <div className="mb-0.5 font-semibold text-ink-500">Competitor lane (the crowded angle)</div>
+            <p className="text-ink-700"><span className="font-medium">{gap.name}:</span> {gap.angle}</p>
+          </div>
+        )}
+        {buzz.length > 0 && (
+          <div>
+            <div className="mb-1 font-semibold text-ink-500">Buzz</div>
+            <ul className="space-y-1">
+              {buzz.map((b, i) => (
+                <li key={i} className="flex items-start gap-1.5">
+                  <span className={cn('mt-1 h-1.5 w-1.5 shrink-0 rounded-full', SENTIMENT_DOT[b.sentiment] ?? 'bg-ink-300')} />
+                  <span className="italic text-ink-700">"{b.quote}" <span className="not-italic text-ink-400">— {b.source}</span></span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {sources.length > 0 && (
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 pt-0.5">
+            <span className="font-semibold text-ink-500">Sources:</span>
+            {sources.map((s, i) => (
+              <a key={i} href={s.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-info hover:underline">
+                {s.title}
+                <IconLink size={10} />
+              </a>
+            ))}
+          </div>
+        )}
+        {note && <p className="pt-0.5 text-[11px] text-ink-400">{note}</p>}
+      </div>
     </div>
   )
 }
@@ -1166,140 +1284,242 @@ function SignalsPanel({ topic }: { topic: TopicOpportunity }) {
 }
 
 /* ----------------------------------------------------------------------------
- * Competitor watch — simulated live feed
+ * Trending now — live discovery board (replaces the simulated competitor feed)
  * ------------------------------------------------------------------------- */
 
-interface FeedItem {
-  move: CompetitorMove
-  key: number
-  addedAtMs: number
+const SOURCE_ICON: Record<string, string> = {
+  'Google News': '📰',
+  Wikipedia: '📚',
+  'Hacker News': '🟧',
+  Reddit: '👽',
+  YouTube: '▶️',
 }
 
-const FEED_MAX = 6
-const FEED_INTERVAL_MS = 4500
+/** Purely-planned connectors (not yet wired at all) — shown as "soon" chips
+ *  alongside the API's real "unavailable" sources (which carry a why-tooltip). */
+const PLANNED_SOURCES = ['TikTok', 'X', 'LinkedIn']
 
-function usePrefersReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(false)
-  useEffect(() => {
-    if (typeof window.matchMedia !== 'function') return
-    const mq = window.matchMedia('(prefers-reduced-motion: reduce)')
-    setReduced(mq.matches)
-    const onChange = () => setReduced(mq.matches)
-    mq.addEventListener?.('change', onChange)
-    return () => mq.removeEventListener?.('change', onChange)
-  }, [])
-  return reduced
-}
+/**
+ * Live "what's trending" board from free public feeds (Google News / HN / Reddit
+ * / Wikipedia), fetched server-side via /api/discover. It's the primary Step-1
+ * surface: click a trend to seed a grounded campaign recommendation, or search
+ * news by keyword. Refresh re-pulls the feeds. Seeded fallback when offline.
+ */
+function TrendingNow({ onPick, busy }: { onPick: (title: string) => void; busy: boolean }) {
+  const [board, setBoard] = useState<TrendingBoard | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [q, setQ] = useState('')
+  const [activeQuery, setActiveQuery] = useState('')
+  const [financeOnly, setFinanceOnly] = useState(false)
 
-function relTime(fromMs: number, nowMs: number): string {
-  const s = Math.max(0, Math.round((nowMs - fromMs) / 1000))
-  if (s < 10) return 'just now'
-  if (s < 60) return `${s}s ago`
-  const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m ago`
-  return `${Math.floor(m / 60)}h ago`
-}
-
-/** Animated, clearly-labeled simulated feed of recent competitor moves. */
-function CompetitorFeed() {
-  const reduced = usePrefersReducedMotion()
-  const idxRef = useRef(0)
-  const keyRef = useRef(0)
-  const [paused, setPaused] = useState(false)
-  const [now, setNow] = useState(() => Date.now())
-  const [feed, setFeed] = useState<FeedItem[]>(() => {
-    const base = Date.now()
-    const seedCount = Math.min(5, SEED_COMPETITOR_MOVES.length)
-    const init: FeedItem[] = []
-    for (let i = 0; i < seedCount; i += 1) {
-      init.push({ move: SEED_COMPETITOR_MOVES[i], key: i, addedAtMs: base - (i + 1) * 43_000 })
-    }
-    idxRef.current = seedCount % SEED_COMPETITOR_MOVES.length
-    keyRef.current = seedCount
-    return init
-  })
-
-  // Advance the feed on an interval (unless paused or reduced-motion).
-  useEffect(() => {
-    if (paused || reduced) return
-    const id = setInterval(() => {
-      const i = idxRef.current
-      idxRef.current = i + 1
-      const move = SEED_COMPETITOR_MOVES[i % SEED_COMPETITOR_MOVES.length]
-      const item: FeedItem = { move, key: keyRef.current, addedAtMs: Date.now() }
-      keyRef.current += 1
-      setFeed((prev) => [item, ...prev].slice(0, FEED_MAX))
-      setNow(Date.now())
-    }, FEED_INTERVAL_MS)
-    return () => clearInterval(id)
-  }, [paused, reduced])
-
-  // Keep relative timestamps fresh.
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 15_000)
-    return () => clearInterval(id)
+  // Live refetch: query='' + sector='' → general; a term → keyword news search;
+  // sector='finance' → re-pull top finance-sector topics (real, not client-filtered).
+  const load = useCallback((query = '', sector = '') => {
+    setLoading(true)
+    setActiveQuery(query)
+    fetchTrending({}, query, sector)
+      .then(setBoard)
+      .catch(() => setBoard(null))
+      .finally(() => setLoading(false))
   }, [])
 
-  const live = !paused && !reduced
+  useEffect(() => {
+    load('')
+  }, [load])
+
+  const live = board?.mode === 'live'
+  const groups = board?.groups ?? []
+  const empty = !!board && groups.length === 0 && !loading
+
+  function toggleFinance() {
+    const next = !financeOnly
+    setFinanceOnly(next)
+    setQ('')
+    load('', next ? 'finance' : '')
+  }
+  function runKeyword() {
+    if (q.trim().length < 2) return
+    setFinanceOnly(false)
+    load(q.trim(), '')
+  }
 
   return (
-    <div>
-      <div className="mb-3 flex items-center justify-between">
-        <span
-          className={cn(
-            'inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-bold uppercase tracking-wide ring-1',
-            live ? 'bg-crit/10 text-crit ring-crit/25' : 'bg-ink-100 text-ink-400 ring-ink-200',
-          )}
-        >
-          <span
-            className={cn(
-              'h-1.5 w-1.5 rounded-full',
-              live ? 'animate-pulse-dot bg-crit' : 'bg-ink-400',
-            )}
-          />
-          {live ? 'Live · scanning newsrooms' : reduced ? 'Static' : 'Paused'}
-        </span>
-        {!reduced && (
-          <Button variant="ghost" size="sm" onClick={() => setPaused((p) => !p)}>
-            {paused ? '► Resume' : '❚❚ Pause'}
+    <Card>
+      <CardHeader
+        title={
+          <span className="flex items-center gap-2">
+            Trending now
+            <span
+              className={cn(
+                'inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ring-1',
+                live ? 'bg-ok/10 text-ok ring-ok/25' : 'bg-ink-100 text-ink-400 ring-ink-200',
+              )}
+            >
+              <span className={cn('h-1.5 w-1.5 rounded-full', live ? 'animate-pulse-dot bg-ok' : 'bg-ink-400')} />
+              {live ? 'Live' : loading ? '…' : 'Demo'}
+            </span>
+          </span>
+        }
+        subtitle="Live public signals — click any item to build a grounded campaign."
+        actions={
+          <Button
+            variant="ghost"
+            size="sm"
+            loading={loading}
+            icon={!loading ? <IconRefresh size={14} /> : undefined}
+            onClick={() => load(activeQuery, financeOnly ? 'finance' : '')}
+          >
+            Refresh
           </Button>
+        }
+      />
+
+      {/* news search */}
+      <div className="border-b border-ink-100 px-4 py-3">
+        <form
+          className="flex items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault()
+            runKeyword()
+          }}
+        >
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search news by keyword…"
+            className="h-9 min-w-0 flex-1 rounded-lg border border-ink-200 bg-white px-3 text-sm text-ink-800 placeholder:text-ink-400 focus:border-straive-400 focus:outline-none focus:ring-2 focus:ring-straive-500/20"
+          />
+          <Button type="submit" variant="secondary" size="sm" disabled={loading || q.trim().length < 2}>
+            Search
+          </Button>
+        </form>
+        {/* finance-sector toggle — refetches top finance topics, not a client filter */}
+        <div className="mt-2 flex items-center gap-2">
+          <button
+            role="switch"
+            aria-checked={financeOnly}
+            onClick={toggleFinance}
+            disabled={loading}
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition disabled:opacity-60',
+              financeOnly
+                ? 'border-straive-500 bg-straive-50 text-straive-700'
+                : 'border-ink-200 bg-white text-ink-500 hover:border-ink-300',
+            )}
+          >
+            <span className={cn('h-1.5 w-1.5 rounded-full', financeOnly ? 'bg-straive-500' : 'bg-ink-300')} />
+            Finance sector
+          </button>
+          <span className="text-[11px] text-ink-400">re-pulls top finance topics</span>
+        </div>
+        {(activeQuery || financeOnly) && (
+          <div className="mt-2 flex items-center justify-between gap-2 rounded-lg bg-navy-900 px-2.5 py-1.5 text-xs text-white">
+            <span className="min-w-0 truncate">
+              <span className="text-navy-300">{financeOnly ? 'Showing: ' : 'Results for: '}</span>
+              <span className="font-semibold">{financeOnly ? 'Top finance-sector topics' : activeQuery}</span>
+            </span>
+            <button
+              onClick={() => { setQ(''); setFinanceOnly(false); load('') }}
+              className="shrink-0 rounded p-0.5 text-navy-300 transition hover:text-white"
+              aria-label="Back to general trending"
+            >
+              <IconX size={14} />
+            </button>
+          </div>
         )}
       </div>
 
-      <div className="space-y-2.5">
-        {feed.map((item, i) => (
-          <a
-            key={item.key}
-            href={item.move.url}
-            target="_blank"
-            rel="noreferrer"
-            className={cn(
-              'group flex gap-3 rounded-xl border px-3.5 py-3 transition hover:border-info/40 hover:shadow-cardHover',
-              i === 0 && live ? 'animate-feed-in border-info/40 bg-info/5' : 'border-ink-200',
-            )}
-          >
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-semibold text-ink-900">{item.move.competitor}</span>
-                <span className="text-[11px] tabular-nums text-ink-400">
-                  {relTime(item.addedAtMs, now)}
-                </span>
+      {/* scrollable feed */}
+      <div className="max-h-[calc(100vh-33rem)] min-h-[12rem] overflow-y-auto px-2 py-2">
+        {loading && !board && (
+          <div className="space-y-4 p-2">
+            {[0, 1, 2].map((c) => (
+              <div key={c}>
+                <div className="mb-2 h-3 w-24 rounded bg-ink-100" />
+                {[0, 1, 2].map((r) => (
+                  <div key={r} className="mb-1.5 h-8 rounded bg-ink-50" />
+                ))}
               </div>
-              <p className="mt-0.5 text-xs leading-relaxed text-ink-600">{item.move.move}</p>
+            ))}
+          </div>
+        )}
+
+        {empty && (
+          <p className="px-2 py-8 text-center text-sm text-ink-400">
+            {financeOnly
+              ? 'No finance-sector topics came back right now. Try Refresh, or a keyword like "credit cards".'
+              : activeQuery
+                ? `No live news found for "${activeQuery}". Try a broader term.`
+                : 'No trends available right now.'}
+          </p>
+        )}
+
+        <div className="space-y-3">
+          {groups.map((g) => (
+            <div key={g.source}>
+              <div className="mb-0.5 flex items-center gap-1.5 px-2">
+                <span aria-hidden className="text-xs">{SOURCE_ICON[g.source] ?? '📈'}</span>
+                <span className="text-[11px] font-bold uppercase tracking-wide text-ink-500">{g.source}</span>
+                <span className={cn('h-1.5 w-1.5 rounded-full', g.live ? 'bg-ok' : 'bg-ink-300')} title={g.live ? 'live' : 'illustrative'} />
+              </div>
+              <ol>
+                {g.items.map((it, i) => (
+                  <li key={i}>
+                    <button
+                      onClick={() => onPick(it.title)}
+                      disabled={busy}
+                      title={`Build a campaign from "${it.title}"`}
+                      className="group flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition hover:bg-straive-50 disabled:opacity-50"
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span className="line-clamp-2 text-[13px] font-medium leading-snug text-ink-800 group-hover:text-straive-700">{it.title}</span>
+                        {it.meta && <span className="mt-0.5 block truncate text-[11px] text-ink-400">{it.meta}</span>}
+                        {it.context && (
+                          <span className="mt-0.5 line-clamp-2 text-[11px] italic leading-snug text-ink-400">
+                            why: {it.context}
+                          </span>
+                        )}
+                      </span>
+                      <IconChevron size={14} className="mt-0.5 shrink-0 text-ink-300 opacity-0 transition group-hover:opacity-100" />
+                    </button>
+                  </li>
+                ))}
+              </ol>
             </div>
-            <IconLink
-              size={13}
-              className="mt-0.5 shrink-0 text-ink-300 transition group-hover:text-info"
-            />
-          </a>
-        ))}
+          ))}
+        </div>
+
       </div>
 
-      <p className="pt-3 text-[11px] text-ink-400">
-        Simulated live feed · illustrative, compiled from public sources (cited). No external calls —
-        all data stays in your browser.
-      </p>
-    </div>
+      {/* more sources — the API's real "unavailable" list (why-tooltip) + purely-planned ones */}
+      <div className="border-t border-ink-100 px-4 py-3">
+        <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-ink-400">
+          More sources <span className="font-normal normal-case text-ink-300">· hover for why</span>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {board?.unavailable.map((u) => (
+            <span
+              key={u.source}
+              title={u.reason}
+              className="inline-flex cursor-help items-center gap-1 rounded-md border border-dashed border-ink-200 bg-ink-50/60 px-2 py-0.5 text-[11px] font-medium text-ink-500"
+            >
+              {u.source}
+              <span className="rounded-full bg-ink-200 px-1 text-[9px] font-bold lowercase text-ink-500">?</span>
+            </span>
+          ))}
+          {PLANNED_SOURCES.map((s) => (
+            <span
+              key={s}
+              title="Planned connector — coming soon"
+              className="inline-flex cursor-not-allowed items-center gap-1 rounded-md border border-dashed border-ink-200 bg-ink-50/60 px-2 py-0.5 text-[11px] font-medium text-ink-400"
+            >
+              {s}
+              <span className="rounded-full bg-ink-200 px-1 text-[9px] font-bold uppercase tracking-wide text-ink-500">soon</span>
+            </span>
+          ))}
+        </div>
+      </div>
+    </Card>
   )
 }
 

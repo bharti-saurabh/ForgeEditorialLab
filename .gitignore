@@ -6,3 +6,16 @@ dist-ssr
 .vite
 npm-debug.log*
 *.tsbuildinfo
+
+# Secrets — never commit local env files. These patterns match at any depth,
+# so trend-lens/.env (holds TAVILY_API_KEY) is covered too. Server-side keys
+# belong in the host's env vars, never in the repo.
+.env
+.env.*
+!.env.example
+.vercel
+
+# The standalone Trend Lens app has been merged into src/discovery + api/. Its
+# source folder is kept locally as reference but is NOT part of this repo (it has
+# its own git + a local API key). Delete it whenever you like.
+/trend-lens/

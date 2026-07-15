@@ -103,3 +103,17 @@ export function checkFairness(text: string): FairnessResult {
   }
   return { blocked: false, reason: 'Behavioral / needs-based — cleared for use.', matched: [] }
 }
+
+/**
+ * If an audience trips the screen, replace it with a neutral behavioral segment
+ * and say why. Use on any model-produced audience (recommendations, personas) so
+ * a protected-class audience never surfaces, in demo or live.
+ */
+export function sanitizeAudience(text: string): { value: string; note?: string } {
+  const { blocked, matched } = checkFairness(text)
+  if (!blocked) return { value: text }
+  return {
+    value: 'Consumers actively researching this need (behavioral intent)',
+    note: `Rewritten to a needs-based segment — original referenced ${matched.join(', ')}.`,
+  }
+}

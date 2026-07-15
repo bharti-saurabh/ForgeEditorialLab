@@ -7,6 +7,8 @@
 import type { BrandProfile, FunnelStage, Rating, RecommendedFormat } from '@/types'
 import { buildBrandContext } from '@/lib/brand/grounding'
 import type { RankedTopic } from '@/lib/topics'
+import type { DiscoverPayload } from '@/discovery/types'
+import { sanitizeAudience } from '@/lib/persona'
 
 export const TOPIC_INTEL_SYSTEM =
   `You are the head of content strategy for a regulated U.S. card issuer. You review a ranked backlog of content opportunities and produce a concise executive read: what to prioritize and why, which themes cluster, what the seasonal/regulatory timing implies, and which topics to avoid as off-brand or high-risk. Ground every judgement in the brand. Be specific and decisive; no boilerplate.`
@@ -93,6 +95,8 @@ export interface RawReco {
   whyNow: string
   keyMessage: string
   rationale: string
+  /** the specific retrieved item this recommendation is grounded in */
+  sourceInsight: string
   tags: string[]
   onBrand: boolean
   offBrandReason: string
@@ -180,6 +184,7 @@ export function demoTopicSearch(profile: BrandProfile, query: string): RawReco {
     whyNow: `"${clean}" is an active search theme for ${audienceSegment.toLowerCase()}, and ${profile.brandName}'s transparency angle is under-served by competitors here.`,
     keyMessage: `${profile.brandName} explains ${lower} clearly — material terms up front, no fine-print surprises.`,
     rationale: `Fits ${profile.brandName}'s "you're in control" position: a ${funnelStage}-stage ${format} that turns a common question into a trust-building moment, with the required disclosures handled at the compliance gate.`,
+    sourceInsight: '',
     tags: [...new Set(lower.split(/\W+/).filter((w) => w.length > 3))].slice(0, 4),
     onBrand: !offBrand,
     offBrandReason: offBrand
@@ -196,10 +201,13 @@ function pickEnum<T extends string>(v: unknown, allowed: T[], fb: T): T {
 /** Fill/validate a model-produced recommendation against the deterministic base. */
 export function coerceReco(base: RawReco, parsed: Partial<RawReco> | null): RawReco {
   if (!parsed || typeof parsed !== 'object') return base
+  // Never trust a live model to have obeyed the fairness rule — re-screen the
+  // audience and rewrite it to a behavioral segment if it names a protected class.
+  const audienceSegment = sanitizeAudience(str(parsed.audienceSegment, base.audienceSegment)).value
   return {
     title: str(parsed.title, base.title),
     angle: str(parsed.angle, base.angle),
-    audienceSegment: str(parsed.audienceSegment, base.audienceSegment),
+    audienceSegment,
     funnelStage: pickEnum(parsed.funnelStage, FUNNELS, base.funnelStage),
     format: pickEnum(parsed.format, FORMATS, base.format),
     demand: pickEnum(parsed.demand, RATINGS, base.demand),
@@ -208,10 +216,67 @@ export function coerceReco(base: RawReco, parsed: Partial<RawReco> | null): RawR
     whyNow: str(parsed.whyNow, base.whyNow),
     keyMessage: str(parsed.keyMessage, base.keyMessage),
     rationale: str(parsed.rationale, base.rationale),
+    sourceInsight: str(parsed.sourceInsight, base.sourceInsight),
     tags: Array.isArray(parsed.tags) && parsed.tags.length
       ? (parsed.tags.filter((t) => typeof t === 'string') as string[]).slice(0, 5)
       : base.tags,
     onBrand: typeof parsed.onBrand === 'boolean' ? parsed.onBrand : base.onBrand,
     offBrandReason: str(parsed.offBrandReason, base.offBrandReason),
+  }
+}
+
+// ── Grounded recommendation — built on real discovery (trending/competitor/buzz) ─
+
+export const GROUNDED_SEARCH_SYSTEM = `${TOPIC_SEARCH_SYSTEM}
+
+You are ALSO given retrieved market signals (trending items, competitor angles, community buzz). GROUND the recommendation in them: pick the open angle competitors are NOT owning, and cite the specific item you built on in "sourceInsight" (quote a trending title or a buzz line). Do NOT invent trends, stats, quotes, or sources beyond what's provided.`
+
+function discoveryBlock(d: DiscoverPayload): string {
+  return [
+    'RETRIEVED — TRENDING:',
+    ...d.trending.map((t, i) => `  [T${i + 1}] "${t.title}" (${t.source}, ${t.momentum}) — ${t.angle}`),
+    '',
+    'RETRIEVED — COMPETITOR ANGLES:',
+    ...d.competitors.map((c, i) => `  [C${i + 1}] ${c.name}: ${c.angle}`),
+    '',
+    'RETRIEVED — BUZZ:',
+    ...d.buzz.map((b, i) => `  [B${i + 1}] (${b.sentiment}, ${b.source}) "${b.quote}"`),
+  ].join('\n')
+}
+
+export function buildGroundedRecoPrompt(
+  profile: BrandProfile,
+  query: string,
+  discovery: DiscoverPayload,
+): string {
+  return `${buildBrandContext(profile)}
+
+MARKETER'S SEARCH / CAMPAIGN IDEA:
+"""
+${query}
+"""
+
+${discoveryBlock(discovery)}
+
+Turn this into ONE pointed campaign recommendation for ${profile.brandName}, grounded in the retrieved signals above and using the JSON shape from the system message (include "sourceInsight" citing a specific retrieved item). Make the title publishable, the audience behavioral, and the compliance sensitivity honest.`
+}
+
+/** Deterministic demo reco grounded in the discovery payload. */
+export function demoGroundedReco(
+  profile: BrandProfile,
+  query: string,
+  discovery: DiscoverPayload,
+): RawReco {
+  const base = demoTopicSearch(profile, query)
+  const topTrend = discovery.trending[0]
+  const gapComp = discovery.competitors[0]
+  const complaint = discovery.buzz.find((b) => b.sentiment !== 'positive') ?? discovery.buzz[0]
+  if (!topTrend) return base
+  return {
+    ...base,
+    angle: `Own the gap: counter the crowded "${topTrend.angle}" lane with a proof-led, transparent take.`,
+    whyNow: `"${topTrend.title}" is ${topTrend.momentum} on ${topTrend.source}${gapComp ? `, and ${gapComp.name} clusters on "${gapComp.angle}"` : ''} — the honest, specific angle is open.`,
+    rationale: `Trending coverage shows live demand; buzz shows fatigue with generic takes${complaint ? ` ("${complaint.quote}")` : ''}; competitors under-serve the transparent angle. A plain, proof-led execution fills the gap — with material terms handled at the compliance gate.`,
+    sourceInsight: `Built on trending "${topTrend.title}" (${topTrend.source})${complaint ? ` + buzz "${complaint.quote}"` : ''}`,
   }
 }

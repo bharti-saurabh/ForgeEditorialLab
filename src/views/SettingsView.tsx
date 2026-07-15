@@ -52,7 +52,7 @@ export function SettingsView() {
     <div className="mx-auto max-w-4xl">
       <SectionTitle
         title="Settings"
-        description="Connect your LLM Foundry gateway and assign a model to each role. Everything stays in your browser — nothing is sent anywhere except your gateway."
+        description="Connect your LLM Foundry gateway and assign a model to each role. Your keys stay in the browser. Prompts go to your configured gateway; Topic Intelligence's discovery also fetches public trends/sources through this app's own server function (a search key, if set, lives server-side, never in the browser)."
         actions={
           <Badge tone={live ? 'ok' : 'warn'} dot>
             {live ? 'Live mode — gateway configured' : 'Demo mode — using seeded responses'}

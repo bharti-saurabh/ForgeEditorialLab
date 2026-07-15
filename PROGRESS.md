@@ -488,6 +488,96 @@ and the **Editorial Lab pipeline is now the primary center nav**.
 
 ---
 
+## 16. Trend Lens merged in — live discovery + grounded search (BUILT, all phases)
+
+Merged the standalone **Trend Lens** tool into Forge so Topic Intelligence is fed by
+**real** trending/competitor/buzz signals. **Hosting moved from GitHub Pages → Vercel**
+(the app now has a serverless function).
+
+### Hosting / foundation (Phase 1)
+- **`.gitignore`**: added `.env`/`.env.*` (+ `!.env.example`, `.vercel`) repo-wide, and
+  `/trend-lens/` (the source folder is kept locally for reference but excluded from the
+  repo — it has its own git + a local Tavily key). **Never commit `.env`.**
+- Discovery **backend** copied in, namespaced to avoid collisions: **`api/`** (the one
+  serverless function `discover.ts` + `discoverCore`/`trendingCore` + `_providers` +
+  `_trends`) and **`src/discovery/`** (types, `demoDiscover`, `demoTrending`,
+  `normalizeDiscover`, `discover.ts`/`trending.ts` clients). Import paths rewritten
+  `src/lib/*` → `src/discovery/*`.
+- **`vite.config.ts`**: base `/ForgeEditorialLab/` → **`/`**; added a **dev middleware**
+  that serves `POST /api/discover` locally via the same core (so `npm run dev` = live
+  discovery when `TAVILY_API_KEY` is in a local `.env`); loads `.env` into `process.env`.
+- Added `vercel.json`, `@vercel/node` dep; `tsconfig.app.json` include now `["src","api"]`
+  so `tsc -b` typechecks the function. **Removed the Pages workflow** (`deploy.yml`).
+
+### Grounded campaign search (Phase 3)
+- Step-1 search now: query → **`discoverTopic()`** (`/api/discover`) → synthesis grounded
+  in the retrieved signals → one pointed reco **with cited sources**.
+- `prompts/topicIntel.ts`: `GROUNDED_SEARCH_SYSTEM` + `buildGroundedRecoPrompt` +
+  `demoGroundedReco`; `RawReco` gained `sourceInsight`. The `RecommendationCard` shows a
+  Grounded·live/seeded chip, the source insight, and an **Evidence** panel
+  (trending + competitor lane + buzz + cited source links).
+
+### Live Trending board (Phase 4)
+- Replaced the **simulated** Competitor Watch with a live **`TrendingNow`** board
+  (`fetchTrending` → `/api/discover {action:'trending'}`): Google News / HN / Reddit /
+  Wikipedia, server-side, **no key needed**. Clicking a trend seeds the grounded search.
+  Deleted the old `CompetitorFeed` + helpers. Buttons/modal renamed "Trending".
+
+### Reconcile + ship (Phase 5)
+- **`sanitizeAudience`** added to `persona.ts` (reuses the word-boundary `checkFairness`)
+  and applied in `coerceReco` — a model-produced protected-class audience is auto-rewritten
+  to a behavioral segment.
+- **Guardrail wording** in SettingsView updated to be honest: prompts go to the gateway,
+  discovery also fetches public trends/sources via the app's own server function (search
+  key server-side only).
+- **Finance-bias:** `TrendingNow` has a live keyword filter — blank = general newsjacking,
+  a term (e.g. "credit cards") = domain-relevant feed. Verified: "credit cards" returns
+  finance headlines ("Millions of Americans take on debt…", "Anatomy of a credit card
+  rewards program").
+
+**Verified in a real browser** (Playwright): grounded reco with evidence renders; the
+Trending board loads live and click-to-seed works; keyword filter returns finance results;
+zero page errors. Build green throughout. `src/seed/competitorMoves.ts` is now dead
+(unused, harmless — delete anytime).
+
+### DEPLOY (Vercel) — user actions
+1. Import the GitHub repo in **Vercel** (it auto-detects Vite + the `api/` function).
+2. Set **`TAVILY_API_KEY`** in Vercel → Settings → Environment Variables to promote
+   discovery to live (optional — the general trending board is already live via free feeds).
+3. The site URL changes from `bharti-saurabh.github.io/ForgeEditorialLab/` to the Vercel URL.
+
+---
+
+## 17. Step-1 flow redesign + live trending upgrades (BUILT)
+
+Built on top of §16 (Trend Lens merge).
+- **Unified discovery rail:** the "Describe a campaign idea" search moved into the
+  TOP of the left rail, above **Trending now** (divider "or pick what's trending");
+  the right column is always the result. Full-width hero removed. Backlog moved
+  behind a top-bar **"Backlog"** button (modal); Trending is the primary left panel.
+- **Live "Trending now" board** (replaces the simulated Competitor Watch): now leads
+  with **Google Trends** (real trending searches via the current `trends.google.com/
+  trending/rss` endpoint — the old daily RSS 404s), then Google News / Wikipedia /
+  Hacker News (all keyless, server-side). Each Google Trend shows **why it's trending**
+  (the related news headline). Reddit/YouTube/Instagram surface in a **"More sources"**
+  strip with hover-reasons (fixed a silent-drop bug: blocked/empty sources were vanishing
+  instead of being reported). `stripTags` now decodes `&apos;`/`&#39;`.
+- **"Finance sector" toggle → real refetch** (not a client filter): threads
+  `sector:'finance'` through `fetchTrending → /api/discover → runTrending →
+  aggregateTrends`. Google News *searches* a finance query; the ranked sources
+  (Trends/Wikipedia/HN) fetch-and-finance-filter (per-source `financeStrategy`).
+- **Vercel-safe:** renamed `api/discoverCore.ts`/`trendingCore.ts` → `_discoverCore.ts`/
+  `_trendingCore.ts` so Vercel doesn't treat the helper modules as broken API routes
+  (only `api/discover.ts` is a route). Verified end-to-end in a real browser (Playwright).
+
+**Deploy:** Vercel (recommended — zero code changes). Import the repo; Vercel detects
+Vite + the `api/` function. Optional env vars: `TAVILY_API_KEY` (live topic discovery),
+`SEARCH_PROVIDER`, `TRENDS_GEO`, `YOUTUBE_API_KEY`. LLM gateway key stays in-app (Settings).
+Caveat: some feeds (Reddit blocked; Google News/Trends occasionally) rate-limit datacenter
+IPs — the board degrades to seeded/honest-unavailable, never breaks.
+
+---
+
 ## 11. Working style / preferences observed
 - User iterates fast, says "go"/"yes" to proceed; likes: critique-first, then a
   **phased plan**, then build phase-by-phase with a build check each time.
